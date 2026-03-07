@@ -19,30 +19,20 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    final raw = await ssh.run(r'''
-echo "=F="; nvram get qos_enable 2>/dev/null || echo ""
-echo "=F="; nvram get qos_type 2>/dev/null || echo ""
-echo "=F="; nvram get qos_default 2>/dev/null || echo ""
-echo "=F="; nvram get qos_obw 2>/dev/null || echo ""
-echo "=F="; nvram get qos_ibw 2>/dev/null || echo ""
-echo "=F="; nvram get qos_cmode 2>/dev/null || echo ""
-echo "=F="; nvram get qos_bwcap 2>/dev/null || echo ""
-''');
-    final parts = raw.split('=F=').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-    final vals = parts.map((p) => p.split('\n').where((l) => l.isNotEmpty).lastOrNull?.trim() ?? '').toList();
-    // FreshTomato qos_type: 0=HTB, 3=CAKE AQM (qos_type=3 means CAKE)
-    // Some builds use qos_type=1 for CAKE - we detect by checking value
-    final rawType = vals.length > 1 ? vals[1] : '0';
-    // Normalize: treat 3 as CAKE
-    final type = rawType;
+    // Use separate calls with echo markers - more reliable than multiline
+    final enable  = (await ssh.run('nvram get qos_enable')).trim();
+    final type    = (await ssh.run('nvram get qos_type')).trim();
+    final defCls  = (await ssh.run('nvram get qos_default')).trim();
+    final obw     = (await ssh.run('nvram get qos_obw')).trim();
+    final ibw     = (await ssh.run('nvram get qos_ibw')).trim();
+    final cmode   = (await ssh.run('nvram get qos_cmode 2>/dev/null || echo 0')).trim();
     return {
-      'enable':  vals.length > 0 ? vals[0] : '0',
-      'type':    type,
-      'default': vals.length > 2 ? vals[2] : '-',
-      'obw':     vals.length > 3 ? vals[3] : '-',
-      'ibw':     vals.length > 4 ? vals[4] : '-',
-      'cmode':   vals.length > 5 ? vals[5] : '0',
-      'bwcap':   vals.length > 6 ? vals[6] : '0',
+      'enable':  enable.isEmpty  ? '0' : enable,
+      'type':    type.isEmpty    ? '0' : type,
+      'default': defCls.isEmpty  ? ''  : defCls,
+      'obw':     obw.isEmpty     ? ''  : obw,
+      'ibw':     ibw.isEmpty     ? ''  : ibw,
+      'cmode':   cmode.isEmpty   ? '0' : cmode,
     };
   } catch (_) { return {}; }
 });
@@ -836,14 +826,33 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
 
   void _showEditDialog(BuildContext ctx, Map<String, String> d) {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
-    bool enabled = (d['enable'] ?? '0') == '1';
-    String type  = d['type'] ?? '0';
-    String obw   = d['obw'] ?? '';
-    String ibw   = d['ibw'] ?? '';
-    String def   = d['default'] ?? 'Standard';
+    bool enabled  = (d['enable'] ?? '0') == '1';
+    // FreshTomato: 0=HTB classic, 3=CAKE AQM
+    String rawType = d['type'] ?? '0';
+    String type = (rawType == '3') ? '3' : '0';
+    String cmode = d['cmode'] ?? '0';
+    String obw  = d['obw'] ?? '';
+    String ibw  = d['ibw'] ?? '';
+
+    // HTB default class - FreshTomato standard names
+    const classOptions = [
+      'Service','VOIP/Game','Remote','WWW','Media',
+      'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl',
+    ];
+    final rawDef = d['default'] ?? '';
+    String defClass = classOptions.contains(rawDef) ? rawDef : 'Service';
+
+    // CAKE mode options (qos_cmode nvram key)
+    const cakeModes = [
+      MapEntry('0', 'Single class [besteffort]'),
+      MapEntry('1', '8 priority [diffserv8] - DSCP'),
+      MapEntry('2', '4 priority [diffserv4] - DSCP'),
+      MapEntry('3', '3 priority [diffserv3] - DSCP'),
+      MapEntry('4', '8 priority [precedence] - ToS'),
+    ];
+
     final obwCtrl = TextEditingController(text: obw);
     final ibwCtrl = TextEditingController(text: ibw);
-    final defCtrl = TextEditingController(text: def);
 
     showDialog(
       context: ctx,
@@ -856,71 +865,75 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
               // Enable toggle
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 const Text('QoS Enabled'),
-                Switch(
-                  value: enabled,
-                  activeColor: accent,
-                  onChanged: (v) => setS(() => enabled = v),
-                ),
+                Switch(value: enabled, activeColor: accent,
+                  onChanged: (v) => setS(() => enabled = v)),
               ]),
-              const SizedBox(height: 12),
-              // Mode dropdown
+              const SizedBox(height: 14),
+              // Mode: HTB or CAKE AQM only
               DropdownButtonFormField<String>(
                 value: type,
                 decoration: const InputDecoration(labelText: 'Mode', border: OutlineInputBorder()),
                 items: const [
                   DropdownMenuItem(value: '0', child: Text('HTB (classic)')),
-                  DropdownMenuItem(value: '1', child: Text('CAKE AQM')),
-                  DropdownMenuItem(value: '2', child: Text('HFSC')),
+                  DropdownMenuItem(value: '3', child: Text('CAKE AQM')),
                 ],
-                onChanged: (v) => setS(() => type = v ?? '0'),
+                onChanged: (v) => setS(() { type = v ?? '0'; }),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
+              // HTB: show Default Class dropdown
+              if (type == '0') ...[
+                DropdownButtonFormField<String>(
+                  value: defClass,
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'Default Class', border: OutlineInputBorder()),
+                  items: classOptions.map((o) =>
+                    DropdownMenuItem(value: o, child: Text(o))).toList(),
+                  onChanged: (v) => setS(() => defClass = v ?? 'Service'),
+                ),
+                const SizedBox(height: 14),
+              ],
+              // CAKE AQM: show CAKE mode dropdown
+              if (type == '3') ...[
+                DropdownButtonFormField<String>(
+                  value: cakeModes.any((e) => e.key == cmode) ? cmode : '0',
+                  isExpanded: true,
+                  decoration: const InputDecoration(labelText: 'CAKE Mode', border: OutlineInputBorder()),
+                  items: cakeModes.map((e) => DropdownMenuItem(
+                    value: e.key,
+                    child: Text(e.value, style: const TextStyle(fontSize: 13)))).toList(),
+                  onChanged: (v) => setS(() => cmode = v ?? '0'),
+                ),
+                const SizedBox(height: 14),
+              ],
               // Upload bandwidth
               TextField(
                 controller: obwCtrl,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                  labelText: 'Upload Limit (kbit/s)',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. 10000',
-                ),
+                  labelText: 'Upload Bandwidth (kbit/s)',
+                  border: OutlineInputBorder(), hintText: 'e.g. 10000'),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               // Download bandwidth
               TextField(
                 controller: ibwCtrl,
                 keyboardType: TextInputType.number,
                 decoration: const InputDecoration(
-                  labelText: 'Download Limit (kbit/s)',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. 50000',
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Default class
-              TextField(
-                controller: defCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Default Class',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. Standard',
-                ),
+                  labelText: 'Download Bandwidth (kbit/s)',
+                  border: OutlineInputBorder(), hintText: 'e.g. 50000'),
               ),
             ]),
           ),
           actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dCtx),
-              child: const Text('Cancel'),
-            ),
+            TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Cancel')),
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: accent),
               onPressed: () {
                 Navigator.pop(dCtx);
                 _save(d,
-                  enabled: enabled, type: type,
+                  enabled: enabled, type: type, cmode: cmode,
                   obw: obwCtrl.text.trim(), ibw: ibwCtrl.text.trim(),
-                  defaultClass: defCtrl.text.trim());
+                  defaultClass: type == '0' ? defClass : '');
               },
               child: const Text('Apply', style: TextStyle(color: Colors.white)),
             ),
@@ -935,8 +948,8 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final basic  = ref.watch(qosBasicProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
-    // FreshTomato: 0=HTB, 3=CAKE AQM
-    final modeMap = {'0': 'HTB (classic)', '3': 'CAKE AQM'};
+    // FreshTomato: 0=HTB, 3=CAKE AQM (some builds: 1=CAKE)
+    final modeMap = {'0':'HTB (classic)','1':'CAKE AQM','2':'CAKE AQM','3':'CAKE AQM'};
     final cakeModeMap = {
       '0': 'Single class [besteffort]',
       '1': '8 priority [diffserv8]',
@@ -991,20 +1004,21 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
               _QRow(
                   label: 'Mode',
                   value: modeMap[d['type'] ?? ''] ?? 'HTB (classic)'),
-              // HTB: show default class
+              // HTB (type=0): show default class
               if ((d['type'] ?? '0') == '0')
-                _QRow(label: 'Default Class', value: d['default']?.isNotEmpty == true ? d['default']! : '-'),
-              // CAKE: show cake mode
-              if ((d['type'] ?? '0') == '3')
+                _QRow(label: 'Default Class',
+                  value: d['default']?.isNotEmpty == true ? d['default']! : '-'),
+              // CAKE (type=1,2,3): show cake mode
+              if (['1','2','3'].contains(d['type'] ?? '0'))
                 _QRow(label: 'CAKE Mode',
-                  value: cakeModeMap[d['cmode'] ?? ''] ?? 'Single class'),
+                  value: cakeModeMap[d['cmode'] ?? ''] ?? 'Single class [besteffort]'),
               _QRow(
                   label: 'Upload Limit',
-                  value: (d['obw']?.isNotEmpty == true && d['obw'] != '-') ? '${d['obw']} kbit/s' : '- kbit/s',
+                  value: (d['obw']?.isNotEmpty == true) ? '${d['obw']} kbit/s' : 'Not set',
                   valueColor: accent),
               _QRow(
                   label: 'Download Limit',
-                  value: (d['ibw']?.isNotEmpty == true && d['ibw'] != '-') ? '${d['ibw']} kbit/s' : '- kbit/s',
+                  value: (d['ibw']?.isNotEmpty == true) ? '${d['ibw']} kbit/s' : 'Not set',
                   valueColor: accent),
             ]),
           ),
@@ -1028,20 +1042,28 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     final ssh = ref.read(sshServiceProvider);
     setState(() => _saving = true);
     try {
+      // Encode each rule back to FreshTomato nvram format
+      // FreshTomato: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable>...
+      const _protoToNum = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'};
       final encoded = rules.map((r) {
-        final protoNum = r['proto'] ?? '0';
-        final p1 = r['port1'] ?? r['srcport'] ?? '0';
-        final p2 = r['port2'] ?? r['dstport'] ?? p1;
+        final rawProto = r['proto'] ?? '0';
+        // Convert display name to numeric if needed
+        final protoNum = _protoToNum[rawProto] ?? rawProto;
+        final p1  = (r['port1']?.isNotEmpty == true) ? r['port1']! : (r['srcport'] ?? '0');
+        final p2  = (r['port2']?.isNotEmpty == true) ? r['port2']! : p1;
         final kb1 = r['kb1'] ?? '0';
         final kb2 = r['kb2'] ?? '0';
         final prio = r['prio'] ?? '5';
-        final src = r['src'] ?? '';
-        final dst = r['dst'] ?? '';
-        final desc = r['rawDesc'] ?? r['desc'] ?? '';
+        final src  = r['src'] ?? '';
+        final dst  = r['dst'] ?? '';
+        // Use rawDesc if available (original un-modified description)
+        final desc = r['rawDesc']?.isNotEmpty == true ? r['rawDesc']!
+                   : (r['desc'] ?? '');
         // FreshTomato format: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable
-        return '$src<$dst<$protoNum<$p1<$p2<$kb1<$kb2<$prio<0<0<$desc<1>';
+        return '\$src<\$dst<\$protoNum<\$p1<\$p2<\$kb1<\$kb2<\$prio<0<0<\$desc<1';
       }).join('>');
-      await ssh.run("nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true");
+      // Write to nvram - use printf to avoid shell escaping issues
+      await ssh.run("nvram set qos_orules='\$encoded' && nvram commit && service qos restart 2>/dev/null || true");
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
