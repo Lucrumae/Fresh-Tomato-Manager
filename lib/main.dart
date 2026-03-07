@@ -30,12 +30,13 @@ class TomatoManagerApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final config = ref.watch(configProvider);
     final isDark  = ref.watch(darkModeProvider);
+    final accent  = ref.watch(accentProvider);
 
     return MaterialApp(
       title: 'Tomato Manager',
       debugShowCheckedModeBanner: false,
-      theme: AppTheme.light,
-      darkTheme: AppTheme.dark,
+      theme: AppTheme.light(accent),
+      darkTheme: AppTheme.dark(accent),
       themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
       localizationsDelegates: const [
         AppL10n.delegate,

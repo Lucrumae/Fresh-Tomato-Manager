@@ -88,6 +88,7 @@ class _TS extends ConsumerState<TerminalScreen> {
   final _hist=<String>[];
   int _hi=-1;
   bool _isDark=true;
+  Color _accent = AppTheme.terminal;
 
   @override void initState() {
     super.initState();
@@ -137,7 +138,7 @@ class _TS extends ConsumerState<TerminalScreen> {
 
   void _addSys(String t) {
     if(!mounted) return;
-    setState((){ _lines.add(_Line(t,[_Span(t,fg:AppTheme.terminal.withOpacity(0.6))])); }); _bot();
+    setState((){ _lines.add(_Line(t,[_Span(t,fg:_accent.withOpacity(0.6))])); }); _bot();
   }
 
   void _addAnsi(String raw, {bool partial=false, bool err=false}) {
@@ -189,9 +190,12 @@ class _TS extends ConsumerState<TerminalScreen> {
   @override
   Widget build(BuildContext context) {
     _isDark = Theme.of(context).brightness == Brightness.dark;
+    final appColors = Theme.of(context).extension<AppColors>();
+    final accent = appColors?.accent ?? accent;
     final textColor = _isDark ? const Color(0xFFCDD6F4) : const Color(0xFF1A202C);
 
-    return Container(
+    return SafeArea(
+      child: Container(
       color: _bg,
       child: Column(children: [
 
@@ -201,12 +205,12 @@ class _TS extends ConsumerState<TerminalScreen> {
           color: _bar,
           child: Row(children:[
             Container(width:8, height:8, decoration:BoxDecoration(
-              color:_conn?AppTheme.terminal:Colors.redAccent,
+              color:_conn?accent:Colors.redAccent,
               shape:BoxShape.circle)),
             const SizedBox(width:8),
             Text(_conn?'Connected':'Disconnected',
               style:GoogleFonts.jetBrainsMono(
-                color:_conn?AppTheme.terminal:Colors.redAccent,
+                color:_conn?accent:Colors.redAccent,
                 fontSize:11, fontWeight:FontWeight.w500)),
             const Spacer(),
             GestureDetector(
@@ -218,14 +222,14 @@ class _TS extends ConsumerState<TerminalScreen> {
               child:Container(
                 padding:const EdgeInsets.symmetric(horizontal:10, vertical:4),
                 decoration:BoxDecoration(
-                  color:AppTheme.terminal.withOpacity(0.1),
-                  border:Border.all(color:AppTheme.terminal.withOpacity(0.4)),
+                  color:accent.withOpacity(0.1),
+                  border:Border.all(color:accent.withOpacity(0.4)),
                   borderRadius:BorderRadius.circular(6)),
                 child:Row(mainAxisSize:MainAxisSize.min, children:[
-                  Icon(Icons.refresh_rounded, color:AppTheme.terminal, size:14),
+                  Icon(Icons.refresh_rounded, color:accent, size:14),
                   const SizedBox(width:4),
                   Text('Reconnect',style:GoogleFonts.jetBrainsMono(
-                    color:AppTheme.terminal, fontSize:11)),
+                    color:accent, fontSize:11)),
                 ]),
               ),
             ),
@@ -237,10 +241,10 @@ class _TS extends ConsumerState<TerminalScreen> {
           child: _loading
             ? Center(child:Column(mainAxisSize:MainAxisSize.min, children:[
                 const SizedBox(width:18,height:18,
-                  child:CircularProgressIndicator(color:AppTheme.terminal,strokeWidth:1.5)),
+                  child:CircularProgressIndicator(color:accent,strokeWidth:1.5)),
                 const SizedBox(height:10),
                 Text('Starting shell...',style:GoogleFonts.jetBrainsMono(
-                  color:AppTheme.terminal,fontSize:11)),
+                  color:accent,fontSize:11)),
               ]))
             : ListView.builder(
                 controller:_scroll,
@@ -270,27 +274,45 @@ class _TS extends ConsumerState<TerminalScreen> {
 
             Divider(height:1, color:_brd),
 
-            // Row 2: Ctrl keys
+            // Row 2: Ctrl keys (lengkap)
             SizedBox(
               height: 34,
               child: ListView(
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal:6, vertical:5),
                 children: [
+                  // History navigation
                   _cBtn('↑', _hUp, col:Colors.white70),
                   _cBtn('↓', _hDn, col:Colors.white70),
                   _sep(),
+                  // Signal / process
                   _cBtn('^C', ()=>_raw([3])),
                   _cBtn('^D', ()=>_raw([4])),
                   _cBtn('^Z', ()=>_raw([26])),
+                  _sep(),
+                  // Screen / clear
                   _cBtn('^L', ()=>_raw([12])),
-                  _cBtn('^A', ()=>_raw([1])),
-                  _cBtn('^E', ()=>_raw([5])),
-                  _cBtn('^U', ()=>_raw([21])),
-                  _cBtn('^W', ()=>_raw([23])),
-                  _cBtn('^R', ()=>_raw([18])),
+                  _cBtn('^S', ()=>_raw([19])),   // stop scroll
+                  _cBtn('^Q', ()=>_raw([17])),   // resume scroll
+                  _sep(),
+                  // Cursor movement
+                  _cBtn('^A', ()=>_raw([1])),    // line start
+                  _cBtn('^E', ()=>_raw([5])),    // line end
+                  _cBtn('^←', ()=>_raw([27,98]), col:Colors.white54), // word left (Alt+B)
+                  _cBtn('^→', ()=>_raw([27,102]), col:Colors.white54), // word right (Alt+F)
+                  _sep(),
+                  // Delete
+                  _cBtn('^U', ()=>_raw([21])),   // clear line
+                  _cBtn('^K', ()=>_raw([11])),   // kill to end
+                  _cBtn('^W', ()=>_raw([23])),   // del word back
+                  _cBtn('^Y', ()=>_raw([25])),   // paste (yank)
+                  _sep(),
+                  // Search & misc
+                  _cBtn('^R', ()=>_raw([18])),   // reverse search
+                  _cBtn('^T', ()=>_raw([20])),   // transpose chars
                   _cBtn('Tab', ()=>_raw([9]), col:Colors.white54),
                   _cBtn('Esc', ()=>_raw([27]), col:Colors.white54),
+                  _cBtn('Del', ()=>_raw([127]), col:Colors.white54),
                   _sep(),
                   _cBtn('Clear', ()=>setState(()=>_lines.clear()), col:AppTheme.warning),
                 ],
@@ -305,11 +327,11 @@ class _TS extends ConsumerState<TerminalScreen> {
               padding: const EdgeInsets.fromLTRB(10,4,10,6),
               child: Row(children:[
                 Text('# ', style:GoogleFonts.jetBrainsMono(
-                  color:AppTheme.terminal, fontSize:13, fontWeight:FontWeight.bold)),
+                  color:accent, fontSize:13, fontWeight:FontWeight.bold)),
                 Expanded(child:TextField(
                   controller:_input, focusNode:_focus, enabled:_conn,
                   style:GoogleFonts.jetBrainsMono(color:textColor, fontSize:13),
-                  cursorColor:AppTheme.terminal,
+                  cursorColor:accent,
                   decoration:InputDecoration(
                     isDense:true, border:InputBorder.none,
                     enabledBorder:InputBorder.none, focusedBorder:InputBorder.none,
@@ -324,7 +346,7 @@ class _TS extends ConsumerState<TerminalScreen> {
                 GestureDetector(
                   onTap:()=>_send(_input.text),
                   child:Padding(padding:const EdgeInsets.all(6),
-                    child:Icon(Icons.send_rounded, color:AppTheme.terminal, size:17))),
+                    child:Icon(Icons.send_rounded, color:accent, size:17))),
               ]),
             ),
 
@@ -332,7 +354,7 @@ class _TS extends ConsumerState<TerminalScreen> {
         ),
 
       ]),
-    );
+    ));
   }
 
   Widget _buildLine(_Line l) {
@@ -355,10 +377,10 @@ class _TS extends ConsumerState<TerminalScreen> {
       margin:const EdgeInsets.only(right:5),
       padding:const EdgeInsets.symmetric(horizontal:9, vertical:2),
       decoration:BoxDecoration(
-        border:Border.all(color:AppTheme.terminal.withOpacity(0.3)),
+        border:Border.all(color:_accent.withOpacity(0.3)),
         borderRadius:BorderRadius.circular(4)),
       child:Text(label, style:GoogleFonts.jetBrainsMono(
-        color:AppTheme.terminal, fontSize:11))));
+        color:_accent, fontSize:11))));
 
   Widget _cBtn(String label, VoidCallback fn, {Color? col}) =>
     GestureDetector(onTap:fn, child:Container(

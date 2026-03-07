@@ -15,6 +15,7 @@ class SettingsScreen extends ConsumerWidget {
     final l = AppL10n.of(context);
     final config = ref.watch(configProvider);
     final isDark = ref.watch(darkModeProvider);
+    final accent = ref.watch(accentProvider);
     final c = Theme.of(context).extension<AppColors>()!;
 
     return Scaffold(
@@ -82,6 +83,66 @@ class SettingsScreen extends ConsumerWidget {
                 onChanged: (_) => ref.read(darkModeProvider.notifier).toggle(),
               ),
             ]),
+          ),
+
+          const SizedBox(height: 12),
+
+          // ── Accent color picker ──────────────────────────────────────
+          AppCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(children: [
+                  Container(
+                    width: 40, height: 40,
+                    decoration: BoxDecoration(
+                      color: accent.main.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(Icons.palette_rounded, color: accent.main, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Warna Aksen', style: Theme.of(context).textTheme.titleSmall),
+                      Text('Aktif: ${accent.label}',
+                        style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  )),
+                ]),
+                const SizedBox(height: 14),
+                Wrap(
+                  spacing: 10, runSpacing: 10,
+                  children: AccentColor.values.map((a) {
+                    final selected = a == accent;
+                    return GestureDetector(
+                      onTap: () => ref.read(accentProvider.notifier).set(a),
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: 38, height: 38,
+                        decoration: BoxDecoration(
+                          color: a.main,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: selected ? Colors.white : Colors.transparent,
+                            width: 3,
+                          ),
+                          boxShadow: selected ? [
+                            BoxShadow(color: a.main.withOpacity(0.5),
+                              blurRadius: 8, spreadRadius: 2)
+                          ] : null,
+                        ),
+                        child: selected
+                          ? const Icon(Icons.check_rounded,
+                              color: Colors.white, size: 18)
+                          : null,
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
           ),
 
           const SizedBox(height: 20),

@@ -1,15 +1,31 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+// ── Accent colors user can pick ────────────────────────────────────────────────
+enum AccentColor {
+  green  (Color(0xFF00E5A0), Color(0xFF00B87A), 'Hijau'),
+  blue   (Color(0xFF4F7EFF), Color(0xFF2D5FE0), 'Biru'),
+  orange (Color(0xFFFF8C00), Color(0xFFE67300), 'Oranye'),
+  red    (Color(0xFFEF4444), Color(0xFFCC2222), 'Merah'),
+  purple (Color(0xFF9B59FC), Color(0xFF7B3FDC), 'Ungu'),
+  pink   (Color(0xFFFF6B9D), Color(0xFFE0417A), 'Pink'),
+  yellow (Color(0xFFF59E0B), Color(0xFFD4850A), 'Kuning');
+
+  final Color main;
+  final Color dark;
+  final String label;
+  const AccentColor(this.main, this.dark, this.label);
+}
+
 class AppTheme {
   // ── Light palette ──────────────────────────────────────────────────────────
-  static const Color background   = Color(0xFFF5F6FA);
-  static const Color surface      = Color(0xFFFFFFFF);
-  static const Color cardBg       = Color(0xFFFFFFFF);
-  static const Color border       = Color(0xFFE8EAF0);
-  static const Color textPrimary  = Color(0xFF1A1D2E);
-  static const Color textSecondary= Color(0xFF4A5068);
-  static const Color textMuted    = Color(0xFF9399B0);
+  static const Color background    = Color(0xFFF5F6FA);
+  static const Color surface       = Color(0xFFFFFFFF);
+  static const Color cardBg        = Color(0xFFFFFFFF);
+  static const Color border        = Color(0xFFE8EAF0);
+  static const Color textPrimary   = Color(0xFF1A1D2E);
+  static const Color textSecondary = Color(0xFF4A5068);
+  static const Color textMuted     = Color(0xFF9399B0);
 
   // ── Dark palette ───────────────────────────────────────────────────────────
   static const Color darkBackground    = Color(0xFF0F1117);
@@ -20,26 +36,25 @@ class AppTheme {
   static const Color darkTextSecondary = Color(0xFF8A90AA);
   static const Color darkTextMuted     = Color(0xFF555A72);
 
-  // ── Brand colors (same for both) ───────────────────────────────────────────
-  static const Color primary     = Color(0xFF4F7EFF);
-  static const Color primaryLight= Color(0xFFEEF2FF);
-  static const Color secondary   = Color(0xFF7C5CFC);
-  static const Color success     = Color(0xFF22C55E);
-  static const Color warning     = Color(0xFFF59E0B);
-  static const Color danger      = Color(0xFFEF4444);
-  static const Color terminal    = Color(0xFF00E5A0);
+  // ── Brand / status (static, not accent-dependent) ─────────────────────────
+  static const Color primary      = Color(0xFF4F7EFF);
+  static const Color primaryLight = Color(0xFFEEF2FF);
+  static const Color secondary    = Color(0xFF7C5CFC);
+  static const Color success      = Color(0xFF22C55E);
+  static const Color warning      = Color(0xFFF59E0B);
+  static const Color danger       = Color(0xFFEF4444);
 
-  // ── Terminal dark palette ──────────────────────────────────────────────────
-  static const Color terminalBg  = Color(0xFF0D1117);
-  static const Color terminalText= Color(0xFF00E5A0);
+  // ── Terminal accent — resolved at runtime via accentColor ─────────────────
+  // Default green
+  static Color terminal = AccentColor.green.main;
 
-  // ── Light theme ────────────────────────────────────────────────────────────
-  static ThemeData get light => _build(false);
+  // ── Build theme with a given accent ──────────────────────────────────────
+  static ThemeData light([AccentColor accent = AccentColor.green]) =>
+      _build(false, accent);
+  static ThemeData dark([AccentColor accent = AccentColor.green]) =>
+      _build(true, accent);
 
-  // ── Dark theme ─────────────────────────────────────────────────────────────
-  static ThemeData get dark => _build(true);
-
-  static ThemeData _build(bool isDark) {
+  static ThemeData _build(bool isDark, AccentColor accent) {
     final bg     = isDark ? darkBackground    : background;
     final surf   = isDark ? darkSurface       : surface;
     final card   = isDark ? darkCardBg        : cardBg;
@@ -47,13 +62,14 @@ class AppTheme {
     final txtPri = isDark ? darkTextPrimary   : textPrimary;
     final txtSec = isDark ? darkTextSecondary : textSecondary;
     final txtMut = isDark ? darkTextMuted     : textMuted;
+    final acc    = accent.main;
 
     return ThemeData(
       useMaterial3: true,
       brightness: isDark ? Brightness.dark : Brightness.light,
       colorScheme: ColorScheme(
         brightness: isDark ? Brightness.dark : Brightness.light,
-        primary: primary, onPrimary: Colors.white,
+        primary: acc, onPrimary: Colors.white,
         secondary: secondary, onSecondary: Colors.white,
         error: danger, onError: Colors.white,
         surface: surf, onSurface: txtPri,
@@ -96,7 +112,7 @@ class AppTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: primary, width: 1.5),
+          borderSide: BorderSide(color: acc, width: 1.5),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         hintStyle: GoogleFonts.inter(color: txtMut, fontSize: 14),
@@ -104,7 +120,7 @@ class AppTheme {
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
         style: ElevatedButton.styleFrom(
-          backgroundColor: primary, foregroundColor: Colors.white,
+          backgroundColor: acc, foregroundColor: Colors.white,
           minimumSize: const Size(double.infinity, 52),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           textStyle: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
@@ -116,17 +132,18 @@ class AppTheme {
         AppColors(
           background: bg, surface: surf, cardBg: card, border: bord,
           textPrimary: txtPri, textSecondary: txtSec, textMuted: txtMut,
-          isDark: isDark,
+          isDark: isDark, accent: acc,
         )
       ],
     );
   }
 }
 
-// ── Theme extension for easy access ───────────────────────────────────────────
+// ── Theme extension ────────────────────────────────────────────────────────────
 class AppColors extends ThemeExtension<AppColors> {
   final Color background, surface, cardBg, border;
   final Color textPrimary, textSecondary, textMuted;
+  final Color accent;
   final bool isDark;
 
   const AppColors({
@@ -134,12 +151,14 @@ class AppColors extends ThemeExtension<AppColors> {
     required this.cardBg, required this.border,
     required this.textPrimary, required this.textSecondary,
     required this.textMuted, required this.isDark,
+    required this.accent,
   });
 
   @override
   AppColors copyWith({
     Color? background, Color? surface, Color? cardBg, Color? border,
-    Color? textPrimary, Color? textSecondary, Color? textMuted, bool? isDark,
+    Color? textPrimary, Color? textSecondary, Color? textMuted,
+    bool? isDark, Color? accent,
   }) => AppColors(
     background: background ?? this.background,
     surface: surface ?? this.surface,
@@ -149,6 +168,7 @@ class AppColors extends ThemeExtension<AppColors> {
     textSecondary: textSecondary ?? this.textSecondary,
     textMuted: textMuted ?? this.textMuted,
     isDark: isDark ?? this.isDark,
+    accent: accent ?? this.accent,
   );
 
   @override
@@ -160,7 +180,6 @@ class AppCard extends StatelessWidget {
   final Widget child;
   final EdgeInsets? padding;
   final VoidCallback? onTap;
-
   const AppCard({super.key, required this.child, this.padding, this.onTap});
 
   @override

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import '../models/models.dart';
+import '../theme/app_theme.dart';
 import 'ssh_service.dart';
 import 'notification_service.dart';
 
@@ -29,6 +30,28 @@ class DarkModeNotifier extends StateNotifier<bool> {
     await prefs.setBool('dark_mode', state);
   }
 }
+
+// ── Accent color ──────────────────────────────────────────────────────────────
+final accentProvider = StateNotifierProvider<AccentNotifier, AccentColor>((ref) {
+  return AccentNotifier();
+});
+
+class AccentNotifier extends StateNotifier<AccentColor> {
+  AccentNotifier() : super(AccentColor.green) { _load(); }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    final idx = prefs.getInt('accent_color') ?? 0;
+    state = AccentColor.values[idx.clamp(0, AccentColor.values.length - 1)];
+  }
+
+  Future<void> set(AccentColor accent) async {
+    state = accent;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('accent_color', AccentColor.values.indexOf(accent));
+  }
+}
+
 
 // ── Config ────────────────────────────────────────────────────────────────────
 final configProvider = StateNotifierProvider<ConfigNotifier, TomatoConfig?>((ref) {
