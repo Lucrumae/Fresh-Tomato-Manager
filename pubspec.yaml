@@ -39,7 +39,7 @@ dependencies:
   google_fonts: ^6.2.1
   shimmer: ^3.0.0
   flutter_animate: ^4.5.0
-  lucide_icons: ^0.0.9
+  lucide_icons: ^0.257.0
   badges: ^3.1.2
   pull_to_refresh: ^2.0.0
 
