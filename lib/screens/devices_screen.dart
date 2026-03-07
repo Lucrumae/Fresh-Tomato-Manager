@@ -33,12 +33,12 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     }).toList();
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: CustomScrollView(
         slivers: [
           SliverAppBar(
             floating: true,
-            backgroundColor: AppTheme.surface,
+            backgroundColor: Theme.of(context).colorScheme.surface,
             title: Text('Devices', style: Theme.of(context).textTheme.titleLarge),
             actions: [
               Padding(
@@ -103,9 +103,9 @@ class _DevicesScreenState extends ConsumerState<DevicesScreen> {
     child: Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Icon(Icons.devices_rounded, size: 48, color: AppTheme.textMuted),
+        Icon(Icons.devices_rounded, size: 48, color: Theme.of(context).extension<AppColors>()!.textMuted),
         const SizedBox(height: 12),
-        Text('No devices found', style: TextStyle(color: AppTheme.textMuted)),
+        Text('No devices found', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)),
       ],
     ),
   );
@@ -156,7 +156,7 @@ class _DeviceCard extends ConsumerWidget {
                   const SizedBox(height: 3),
                   Text(device.ip,
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: AppTheme.textSecondary,
+                      color: Theme.of(context).extension<AppColors>()!.textSecondary,
                     ),
                   ),
                   Text(device.mac,
@@ -168,7 +168,7 @@ class _DeviceCard extends ConsumerWidget {
 
             // Actions
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert_rounded, color: AppTheme.textMuted),
+              icon: const Icon(Icons.more_vert_rounded, color: Theme.of(context).extension<AppColors>()!.textMuted),
               onSelected: (action) => _onAction(context, ref, action),
               itemBuilder: (_) => [
                 const PopupMenuItem(value: 'rename', child: Text('Rename')),

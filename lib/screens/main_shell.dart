@@ -7,6 +7,7 @@ import 'devices_screen.dart';
 import 'bandwidth_screen.dart';
 import 'logs_screen.dart';
 import 'settings_screen.dart';
+import 'terminal_screen.dart';
 
 class MainShell extends ConsumerStatefulWidget {
   const MainShell({super.key});
@@ -28,26 +29,41 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   static const _tabs = [
-    _Tab(Icons.dashboard_rounded, 'Dashboard'),
-    _Tab(Icons.devices_rounded, 'Devices'),
-    _Tab(Icons.show_chart_rounded, 'Bandwidth'),
-    _Tab(Icons.article_rounded, 'Logs'),
-    _Tab(Icons.settings_rounded, 'Settings'),
-  ];
-
-  final _screens = const [
-    DashboardScreen(), DevicesScreen(), BandwidthScreen(),
-    LogsScreen(), SettingsScreen(),
+    _Tab(Icons.dashboard_rounded,   'Dashboard'),
+    _Tab(Icons.devices_rounded,     'Devices'),
+    _Tab(Icons.show_chart_rounded,  'Bandwidth'),
+    _Tab(Icons.article_rounded,     'Logs'),
+    _Tab(Icons.terminal_rounded,    'Terminal'),
+    _Tab(Icons.settings_rounded,    'Settings'),
   ];
 
   @override
   Widget build(BuildContext context) {
+    final c = Theme.of(context).extension<AppColors>()!;
+
+    // Terminal gets its own full-screen treatment
+    if (_index == 4) {
+      return WillPopScope(
+        onWillPop: () async { setState(() => _index = 0); return false; },
+        child: const TerminalScreen(),
+      );
+    }
+
+    final screens = [
+      const DashboardScreen(), const DevicesScreen(),
+      const BandwidthScreen(), const LogsScreen(),
+      const SizedBox(), // placeholder for terminal (handled above)
+      const SettingsScreen(),
+    ];
+
     return Scaffold(
-      body: IndexedStack(index: _index, children: _screens),
+      body: IndexedStack(index: _index < 4 ? _index : 5, children: [
+        screens[0], screens[1], screens[2], screens[3], screens[5],
+      ]),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
-          color: AppTheme.surface,
-          border: Border(top: BorderSide(color: AppTheme.border)),
+        decoration: BoxDecoration(
+          color: c.surface,
+          border: Border(top: BorderSide(color: c.border)),
         ),
         child: SafeArea(
           top: false,
@@ -56,6 +72,7 @@ class _MainShellState extends ConsumerState<MainShell> {
             child: Row(
               children: List.generate(_tabs.length, (i) {
                 final sel = i == _index;
+                final isTerminal = i == 4;
                 return Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _index = i),
@@ -64,14 +81,20 @@ class _MainShellState extends ConsumerState<MainShell> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Icon(_tabs[i].icon, size: 22,
-                          color: sel ? AppTheme.primary : AppTheme.textMuted),
+                          color: sel
+                            ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
+                            : c.textMuted,
+                        ),
                         const SizedBox(height: 3),
                         Text(_tabs[i].label,
                           style: TextStyle(
                             fontSize: 10,
                             fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                            color: sel ? AppTheme.primary : AppTheme.textMuted,
-                          )),
+                            color: sel
+                              ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
+                              : c.textMuted,
+                          ),
+                        ),
                       ],
                     ),
                   ),

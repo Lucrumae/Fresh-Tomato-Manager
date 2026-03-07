@@ -15,13 +15,13 @@ class DashboardScreen extends ConsumerWidget {
     final devices = ref.watch(devicesProvider);
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: CustomScrollView(
         slivers: [
           // App Bar
           SliverAppBar(
             floating: true,
-            backgroundColor: AppTheme.surface,
+            backgroundColor: Theme.of(context).colorScheme.surface,
             title: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -197,7 +197,7 @@ class _StatCard extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(children: [
-            Icon(icon, size: 16, color: AppTheme.textSecondary),
+            Icon(icon, size: 16, color: Theme.of(context).extension<AppColors>()!.textSecondary),
             const SizedBox(width: 6),
             Text(label, style: Theme.of(context).textTheme.bodySmall),
           ]),
@@ -299,7 +299,7 @@ class _InfoRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Row(
     children: [
-      Icon(icon, size: 16, color: AppTheme.textMuted),
+      Icon(icon, size: 16, color: Theme.of(context).extension<AppColors>()!.textMuted),
       const SizedBox(width: 10),
       Expanded(child: Text(label, style: Theme.of(context).textTheme.bodyMedium)),
       Text(value, style: Theme.of(context).textTheme.labelLarge),

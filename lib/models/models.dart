@@ -12,16 +12,10 @@ class RouterStatus {
   final bool isOnline;
 
   RouterStatus({
-    required this.cpuPercent,
-    required this.ramUsedMB,
-    required this.ramTotalMB,
-    required this.uptime,
-    required this.wanIp,
-    required this.lanIp,
-    required this.firmware,
-    required this.routerModel,
-    required this.wifiSsid,
-    required this.isOnline,
+    required this.cpuPercent, required this.ramUsedMB, required this.ramTotalMB,
+    required this.uptime, required this.wanIp, required this.lanIp,
+    required this.firmware, required this.routerModel,
+    required this.wifiSsid, required this.isOnline,
   });
 
   double get ramPercent => ramTotalMB > 0 ? ramUsedMB / ramTotalMB * 100 : 0;
@@ -48,13 +42,9 @@ class ConnectedDevice {
   final DateTime lastSeen;
 
   ConnectedDevice({
-    required this.mac,
-    required this.ip,
-    required this.name,
-    required this.interface,
-    required this.rssi,
-    required this.isBlocked,
-    required this.lastSeen,
+    required this.mac, required this.ip, required this.name,
+    required this.interface, required this.rssi,
+    required this.isBlocked, required this.lastSeen,
   });
 
   String get displayName => name.isNotEmpty ? name : mac;
@@ -62,11 +52,9 @@ class ConnectedDevice {
   String get connectionType => isWireless ? 'WiFi' : 'Ethernet';
 
   ConnectedDevice copyWith({String? name, bool? isBlocked}) => ConnectedDevice(
-    mac: mac, ip: ip,
-    name: name ?? this.name,
+    mac: mac, ip: ip, name: name ?? this.name,
     interface: interface, rssi: rssi,
-    isBlocked: isBlocked ?? this.isBlocked,
-    lastSeen: lastSeen,
+    isBlocked: isBlocked ?? this.isBlocked, lastSeen: lastSeen,
   );
 }
 
@@ -84,17 +72,19 @@ class BandwidthStats {
   final double currentTx;
   final double peakRx;
   final double peakTx;
+  final double totalRxMB;
+  final double totalTxMB;
 
   BandwidthStats({
     required this.points,
-    required this.currentRx,
-    required this.currentTx,
-    required this.peakRx,
-    required this.peakTx,
+    required this.currentRx, required this.currentTx,
+    required this.peakRx, required this.peakTx,
+    this.totalRxMB = 0, this.totalTxMB = 0,
   });
 
   factory BandwidthStats.empty() => BandwidthStats(
-    points: [], currentRx: 0, currentTx: 0, peakRx: 0, peakTx: 0,
+    points: [], currentRx: 0, currentTx: 0,
+    peakRx: 0, peakTx: 0, totalRxMB: 0, totalTxMB: 0,
   );
 }
 
@@ -105,11 +95,13 @@ class QosRule {
   String mac;
   int downloadKbps;
   int uploadKbps;
+  int priority;
   bool enabled;
 
   QosRule({
     required this.id, required this.name, required this.mac,
-    required this.downloadKbps, required this.uploadKbps, required this.enabled,
+    required this.downloadKbps, required this.uploadKbps,
+    this.priority = 5, required this.enabled,
   });
 }
 

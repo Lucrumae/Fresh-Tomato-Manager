@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
 import '../models/models.dart';
@@ -8,6 +9,8 @@ class SshService {
   SSHClient? _client;
   TomatoConfig? _config;
   bool _connecting = false;
+
+  SSHClient? get client => _client;
 
   bool get isConnected => _client != null && !(_client!.isClosed);
 
@@ -75,9 +78,9 @@ class SshService {
     if (!isConnected) throw Exception('Not connected');
     try {
       final session = await _client!.execute(command);
-      final output = await session.stdout
-          .transform(const Utf8Decoder(allowMalformed: true))
-          .join();
+      final bytesList = await session.stdout.toList();
+      final allBytes = bytesList.expand((b) => b).toList();
+      final output = String.fromCharCodes(Uint8List.fromList(allBytes));
       await session.done;
       return output.trim();
     } catch (e) {

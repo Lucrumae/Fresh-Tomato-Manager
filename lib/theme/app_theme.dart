@@ -2,102 +2,160 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
 class AppTheme {
-  // Brand colors
-  static const Color primary     = Color(0xFF2563EB); // blue-600
-  static const Color primaryLight= Color(0xFFEFF6FF); // blue-50
-  static const Color secondary   = Color(0xFF0EA5E9); // sky-500
-  static const Color success     = Color(0xFF10B981); // emerald-500
-  static const Color warning     = Color(0xFFF59E0B); // amber-500
-  static const Color danger      = Color(0xFFEF4444); // red-500
-  static const Color surface     = Color(0xFFFFFFFF);
-  static const Color background  = Color(0xFFF8FAFC); // slate-50
-  static const Color cardBg      = Color(0xFFFFFFFF);
-  static const Color border      = Color(0xFFE2E8F0); // slate-200
-  static const Color textPrimary = Color(0xFF0F172A); // slate-900
-  static const Color textSecondary= Color(0xFF64748B); // slate-500
-  static const Color textMuted   = Color(0xFF94A3B8); // slate-400
-  static const Color online      = Color(0xFF10B981);
-  static const Color offline     = Color(0xFF94A3B8);
-  static const Color blocked     = Color(0xFFEF4444);
+  // ── Light palette ──────────────────────────────────────────────────────────
+  static const Color background   = Color(0xFFF5F6FA);
+  static const Color surface      = Color(0xFFFFFFFF);
+  static const Color cardBg       = Color(0xFFFFFFFF);
+  static const Color border       = Color(0xFFE8EAF0);
+  static const Color textPrimary  = Color(0xFF1A1D2E);
+  static const Color textSecondary= Color(0xFF4A5068);
+  static const Color textMuted    = Color(0xFF9399B0);
 
-  static ThemeData get light => ThemeData(
-    useMaterial3: true,
-    colorScheme: ColorScheme.light(
-      primary: primary,
-      secondary: secondary,
-      surface: surface,
-      background: background,
-      error: danger,
-    ),
-    scaffoldBackgroundColor: background,
-    textTheme: GoogleFonts.interTextTheme().copyWith(
-      displayLarge: GoogleFonts.inter(fontSize: 28, fontWeight: FontWeight.w700, color: textPrimary),
-      displayMedium: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w700, color: textPrimary),
-      titleLarge: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: textPrimary),
-      titleMedium: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, color: textPrimary),
-      titleSmall: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: textPrimary),
-      bodyLarge: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w400, color: textPrimary),
-      bodyMedium: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w400, color: textSecondary),
-      bodySmall: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w400, color: textMuted),
-      labelLarge: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w500, color: textPrimary),
-    ),
-    cardTheme: CardTheme(
-      color: cardBg,
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(16),
-        side: const BorderSide(color: border, width: 1),
+  // ── Dark palette ───────────────────────────────────────────────────────────
+  static const Color darkBackground    = Color(0xFF0F1117);
+  static const Color darkSurface       = Color(0xFF1A1D2E);
+  static const Color darkCardBg        = Color(0xFF1E2235);
+  static const Color darkBorder        = Color(0xFF2A2E45);
+  static const Color darkTextPrimary   = Color(0xFFEDEFF7);
+  static const Color darkTextSecondary = Color(0xFF8A90AA);
+  static const Color darkTextMuted     = Color(0xFF555A72);
+
+  // ── Brand colors (same for both) ───────────────────────────────────────────
+  static const Color primary     = Color(0xFF4F7EFF);
+  static const Color primaryLight= Color(0xFFEEF2FF);
+  static const Color secondary   = Color(0xFF7C5CFC);
+  static const Color success     = Color(0xFF22C55E);
+  static const Color warning     = Color(0xFFF59E0B);
+  static const Color danger      = Color(0xFFEF4444);
+  static const Color terminal    = Color(0xFF00E5A0);
+
+  // ── Terminal dark palette ──────────────────────────────────────────────────
+  static const Color terminalBg  = Color(0xFF0D1117);
+  static const Color terminalText= Color(0xFF00E5A0);
+
+  // ── Light theme ────────────────────────────────────────────────────────────
+  static ThemeData get light => _build(false);
+
+  // ── Dark theme ─────────────────────────────────────────────────────────────
+  static ThemeData get dark => _build(true);
+
+  static ThemeData _build(bool isDark) {
+    final bg     = isDark ? darkBackground    : background;
+    final surf   = isDark ? darkSurface       : surface;
+    final card   = isDark ? darkCardBg        : cardBg;
+    final bord   = isDark ? darkBorder        : border;
+    final txtPri = isDark ? darkTextPrimary   : textPrimary;
+    final txtSec = isDark ? darkTextSecondary : textSecondary;
+    final txtMut = isDark ? darkTextMuted     : textMuted;
+
+    return ThemeData(
+      useMaterial3: true,
+      brightness: isDark ? Brightness.dark : Brightness.light,
+      colorScheme: ColorScheme(
+        brightness: isDark ? Brightness.dark : Brightness.light,
+        primary: primary, onPrimary: Colors.white,
+        secondary: secondary, onSecondary: Colors.white,
+        error: danger, onError: Colors.white,
+        surface: surf, onSurface: txtPri,
+        background: bg, onBackground: txtPri,
       ),
-    ),
-    appBarTheme: AppBarTheme(
-      backgroundColor: surface,
-      elevation: 0,
-      centerTitle: false,
-      titleTextStyle: GoogleFonts.inter(
-        fontSize: 18, fontWeight: FontWeight.w600, color: textPrimary,
+      scaffoldBackgroundColor: bg,
+      textTheme: GoogleFonts.interTextTheme().copyWith(
+        displayLarge:  GoogleFonts.inter(fontSize: 32, fontWeight: FontWeight.w700, color: txtPri),
+        displayMedium: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w700, color: txtPri),
+        titleLarge:    GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: txtPri),
+        titleMedium:   GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w600, color: txtPri),
+        titleSmall:    GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600, color: txtPri),
+        bodyLarge:     GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w400, color: txtSec),
+        bodyMedium:    GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w400, color: txtSec),
+        bodySmall:     GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w400, color: txtMut),
+        labelLarge:    GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w500, color: txtPri),
       ),
-      iconTheme: const IconThemeData(color: textPrimary),
-      surfaceTintColor: Colors.transparent,
-    ),
-    bottomNavigationBarTheme: const BottomNavigationBarThemeData(
-      backgroundColor: surface,
-      selectedItemColor: primary,
-      unselectedItemColor: textMuted,
-      elevation: 0,
-      type: BottomNavigationBarType.fixed,
-    ),
-    dividerTheme: const DividerThemeData(color: border, thickness: 1, space: 1),
-    inputDecorationTheme: InputDecorationTheme(
-      filled: true,
-      fillColor: background,
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: border),
+      cardTheme: CardTheme(
+        color: card, elevation: 0, margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(color: bord),
+        ),
       ),
-      enabledBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: border),
+      appBarTheme: AppBarTheme(
+        backgroundColor: surf, elevation: 0, centerTitle: false,
+        surfaceTintColor: Colors.transparent,
+        titleTextStyle: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600, color: txtPri),
+        iconTheme: IconThemeData(color: txtPri),
       ),
-      focusedBorder: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(12),
-        borderSide: const BorderSide(color: primary, width: 2),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true, fillColor: isDark ? darkCardBg : const Color(0xFFF8F9FE),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: bord),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: bord),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: primary, width: 1.5),
+        ),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        hintStyle: GoogleFonts.inter(color: txtMut, fontSize: 14),
+        prefixIconColor: txtMut,
       ),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-    ),
-    elevatedButtonTheme: ElevatedButtonThemeData(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: primary,
-        foregroundColor: Colors.white,
-        elevation: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-        textStyle: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w600),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: primary, foregroundColor: Colors.white,
+          minimumSize: const Size(double.infinity, 52),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          textStyle: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
+          elevation: 0,
+        ),
       ),
-    ),
-  );
+      dividerTheme: DividerThemeData(color: bord, thickness: 1),
+      extensions: [
+        AppColors(
+          background: bg, surface: surf, cardBg: card, border: bord,
+          textPrimary: txtPri, textSecondary: txtSec, textMuted: txtMut,
+          isDark: isDark,
+        )
+      ],
+    );
+  }
 }
 
-// Reusable card widget
+// ── Theme extension for easy access ───────────────────────────────────────────
+class AppColors extends ThemeExtension<AppColors> {
+  final Color background, surface, cardBg, border;
+  final Color textPrimary, textSecondary, textMuted;
+  final bool isDark;
+
+  const AppColors({
+    required this.background, required this.surface,
+    required this.cardBg, required this.border,
+    required this.textPrimary, required this.textSecondary,
+    required this.textMuted, required this.isDark,
+  });
+
+  @override
+  AppColors copyWith({
+    Color? background, Color? surface, Color? cardBg, Color? border,
+    Color? textPrimary, Color? textSecondary, Color? textMuted, bool? isDark,
+  }) => AppColors(
+    background: background ?? this.background,
+    surface: surface ?? this.surface,
+    cardBg: cardBg ?? this.cardBg,
+    border: border ?? this.border,
+    textPrimary: textPrimary ?? this.textPrimary,
+    textSecondary: textSecondary ?? this.textSecondary,
+    textMuted: textMuted ?? this.textMuted,
+    isDark: isDark ?? this.isDark,
+  );
+
+  @override
+  AppColors lerp(AppColors? other, double t) => this;
+}
+
+// ── Reusable card widget ───────────────────────────────────────────────────────
 class AppCard extends StatelessWidget {
   final Widget child;
   final EdgeInsets? padding;
@@ -107,38 +165,21 @@ class AppCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: padding ?? const EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: AppTheme.cardBg,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppTheme.border),
+    final c = Theme.of(context).extension<AppColors>()!;
+    return Material(
+      color: c.cardBg,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: c.border),
+          ),
+          padding: padding ?? const EdgeInsets.all(16),
+          child: child,
         ),
-        child: child,
-      ),
-    );
-  }
-}
-
-// Status badge
-class StatusBadge extends StatelessWidget {
-  final String label;
-  final Color color;
-  const StatusBadge({super.key, required this.label, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w600),
       ),
     );
   }

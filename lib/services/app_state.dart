@@ -10,6 +10,26 @@ import 'notification_service.dart';
 // ── SSH Service singleton ─────────────────────────────────────────────────────
 final sshServiceProvider = Provider<SshService>((ref) => SshService());
 
+// ── Dark mode ─────────────────────────────────────────────────────────────────
+final darkModeProvider = StateNotifierProvider<DarkModeNotifier, bool>((ref) {
+  return DarkModeNotifier();
+});
+
+class DarkModeNotifier extends StateNotifier<bool> {
+  DarkModeNotifier() : super(false) { _load(); }
+
+  Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
+    state = prefs.getBool('dark_mode') ?? false;
+  }
+
+  Future<void> toggle() async {
+    state = !state;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('dark_mode', state);
+  }
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 final configProvider = StateNotifierProvider<ConfigNotifier, TomatoConfig?>((ref) {
   return ConfigNotifier();
@@ -37,14 +57,7 @@ class ConfigNotifier extends StateNotifier<TomatoConfig?> {
   }
 }
 
-// ── Connection state ──────────────────────────────────────────────────────────
-enum AppConnectionState { disconnected, connecting, connected, error }
-
-final connectionStateProvider = StateProvider<AppConnectionState>(
-  (_) => AppConnectionState.disconnected,
-);
-
-// ── Network type ──────────────────────────────────────────────────────────────
+// ── Network type (WiFi check) ─────────────────────────────────────────────────
 final networkTypeProvider = StreamProvider<ConnectivityResult>((ref) {
   return Connectivity().onConnectivityChanged;
 });
@@ -57,7 +70,6 @@ final routerStatusProvider = StateNotifierProvider<RouterStatusNotifier, RouterS
 class RouterStatusNotifier extends StateNotifier<RouterStatus> {
   final Ref _ref;
   Timer? _timer;
-
   RouterStatusNotifier(this._ref) : super(RouterStatus.empty());
 
   void startPolling() {
@@ -88,7 +100,6 @@ class DevicesNotifier extends StateNotifier<List<ConnectedDevice>> {
   final Ref _ref;
   Timer? _timer;
   Set<String> _knownMacs = {};
-
   DevicesNotifier(this._ref) : super([]);
 
   void startPolling() {
@@ -102,17 +113,12 @@ class DevicesNotifier extends StateNotifier<List<ConnectedDevice>> {
   Future<void> fetch() async {
     final ssh = _ref.read(sshServiceProvider);
     if (!ssh.isConnected) return;
-
     final devices = await ssh.getDevices();
-
-    // Load saved names
     final prefs = await SharedPreferences.getInstance();
     for (final d in devices) {
       final saved = prefs.getString('device_name_${d.mac}');
       if (saved != null) d.name = saved;
     }
-
-    // Detect new devices
     final currentMacs = devices.map((d) => d.mac).toSet();
     final newMacs = currentMacs.difference(_knownMacs);
     if (_knownMacs.isNotEmpty && newMacs.isNotEmpty) {
@@ -155,6 +161,7 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   final List<BandwidthPoint> _history = [];
   Map<String, int> _lastSample = {'rx': 0, 'tx': 0};
   bool _firstSample = true;
+  double _totalRxMB = 0, _totalTxMB = 0;
 
   BandwidthNotifier(this._ref) : super(BandwidthStats.empty());
 
@@ -169,40 +176,27 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   Future<void> _poll() async {
     final ssh = _ref.read(sshServiceProvider);
     if (!ssh.isConnected) return;
-
     final sample = await ssh.getBandwidthRaw();
     final rx = sample['rx'] ?? 0;
     final tx = sample['tx'] ?? 0;
-
-    if (_firstSample) {
-      _lastSample = sample;
-      _firstSample = false;
-      return;
-    }
-
-    final rxDelta = (rx - _lastSample['rx']!).clamp(0, double.maxFinite.toInt());
-    final txDelta = (tx - _lastSample['tx']!).clamp(0, double.maxFinite.toInt());
+    if (_firstSample) { _lastSample = sample; _firstSample = false; return; }
+    final rxDelta = (rx - _lastSample['rx']!).clamp(0, 999999999);
+    final txDelta = (tx - _lastSample['tx']!).clamp(0, 999999999);
     final rxKbps = rxDelta / 2 / 1024 * 8;
     final txKbps = txDelta / 2 / 1024 * 8;
+    _totalRxMB += rxDelta / 1024 / 1024;
+    _totalTxMB += txDelta / 1024 / 1024;
     _lastSample = sample;
-
-    final point = BandwidthPoint(
-      time: DateTime.now(),
-      rxKbps: rxKbps,
-      txKbps: txKbps,
-    );
+    final point = BandwidthPoint(time: DateTime.now(), rxKbps: rxKbps, txKbps: txKbps);
     _history.add(point);
     if (_history.length > 60) _history.removeAt(0);
-
     final peakRx = _history.fold(0.0, (a, b) => a > b.rxKbps ? a : b.rxKbps);
     final peakTx = _history.fold(0.0, (a, b) => a > b.txKbps ? a : b.txKbps);
-
     if (mounted) state = BandwidthStats(
       points: List.from(_history),
-      currentRx: rxKbps,
-      currentTx: txKbps,
-      peakRx: peakRx,
-      peakTx: peakTx,
+      currentRx: rxKbps, currentTx: txKbps,
+      peakRx: peakRx, peakTx: peakTx,
+      totalRxMB: _totalRxMB, totalTxMB: _totalTxMB,
     );
   }
 

@@ -13,10 +13,10 @@ class BandwidthScreen extends ConsumerWidget {
     final bw = ref.watch(bandwidthProvider);
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: Text('Bandwidth', style: Theme.of(context).textTheme.titleLarge),
-        backgroundColor: AppTheme.surface,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
@@ -120,7 +120,7 @@ class _RealtimeChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (bw.points.isEmpty) {
-      return const Center(child: Text('Waiting for data...', style: TextStyle(color: AppTheme.textMuted)));
+      return const Center(child: Text('Waiting for data...', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)));
     }
 
     final maxY = [
@@ -142,7 +142,7 @@ class _RealtimeChart extends StatelessWidget {
         show: true,
         drawVerticalLine: false,
         getDrawingHorizontalLine: (_) => FlLine(
-          color: AppTheme.border,
+          color: Theme.of(context).extension<AppColors>()!.border,
           strokeWidth: 1,
         ),
       ),
@@ -153,7 +153,7 @@ class _RealtimeChart extends StatelessWidget {
           reservedSize: 48,
           getTitlesWidget: (v, _) => Text(
             v >= 1024 ? '${(v/1024).toStringAsFixed(1)}M' : '${v.toInt()}K',
-            style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+            style: const TextStyle(fontSize: 10, color: Theme.of(context).extension<AppColors>()!.textMuted),
           ),
         )),
         bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -225,7 +225,7 @@ class _Legend extends StatelessWidget {
       color: color, borderRadius: BorderRadius.circular(2),
     )),
     const SizedBox(width: 5),
-    Text(label, style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+    Text(label, style: const TextStyle(fontSize: 11, color: Theme.of(context).extension<AppColors>()!.textSecondary)),
   ]);
 }
 

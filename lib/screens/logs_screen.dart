@@ -42,9 +42,9 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     }).toList();
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: AppTheme.surface,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         title: Text('System Logs', style: Theme.of(context).textTheme.titleLarge),
         actions: [
           IconButton(
@@ -84,9 +84,9 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
           ? Center(child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.article_rounded, size: 48, color: AppTheme.textMuted),
+                Icon(Icons.article_rounded, size: 48, color: Theme.of(context).extension<AppColors>()!.textMuted),
                 const SizedBox(height: 12),
-                Text('No logs found', style: TextStyle(color: AppTheme.textMuted)),
+                Text('No logs found', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)),
               ],
             ))
           : ListView.separated(
@@ -135,7 +135,7 @@ class _LogTile extends StatelessWidget {
                   const Spacer(),
                   Text(
                     DateFormat('HH:mm:ss').format(entry.time),
-                    style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                    style: const TextStyle(fontSize: 11, color: Theme.of(context).extension<AppColors>()!.textMuted),
                   ),
                 ]),
                 const SizedBox(height: 3),

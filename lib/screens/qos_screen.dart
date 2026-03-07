@@ -28,9 +28,9 @@ class _QosScreenState extends ConsumerState<QosScreen> {
     final rules = ref.watch(qosProvider);
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: AppTheme.surface,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         title: Text('QoS Rules', style: Theme.of(context).textTheme.titleLarge),
       ),
       floatingActionButton: FloatingActionButton(
@@ -53,11 +53,11 @@ class _QosScreenState extends ConsumerState<QosScreen> {
 
   Widget _empty() => Center(
     child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-      Icon(Icons.speed_rounded, size: 48, color: AppTheme.textMuted),
+      Icon(Icons.speed_rounded, size: 48, color: Theme.of(context).extension<AppColors>()!.textMuted),
       const SizedBox(height: 12),
-      Text('No QoS rules yet', style: TextStyle(color: AppTheme.textMuted)),
+      Text('No QoS rules yet', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)),
       const SizedBox(height: 8),
-      Text('Tap + to add a bandwidth limit', style: TextStyle(color: AppTheme.textMuted, fontSize: 13)),
+      Text('Tap + to add a bandwidth limit', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted, fontSize: 13)),
     ]),
   );
 
@@ -70,7 +70,7 @@ class _QosScreenState extends ConsumerState<QosScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -112,7 +112,6 @@ class _QosScreenState extends ConsumerState<QosScreen> {
                     mac: macCtrl.text,
                     downloadKbps: int.tryParse(dlCtrl.text) ?? 0,
                     uploadKbps: int.tryParse(ulCtrl.text) ?? 0,
-                    priority: 5,
                     enabled: true,
                   );
                   Navigator.pop(context);

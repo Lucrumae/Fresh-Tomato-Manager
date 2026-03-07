@@ -9,19 +9,13 @@ import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.dark,
   ));
-
   SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
+    DeviceOrientation.portraitUp, DeviceOrientation.portraitDown,
   ]);
-
   await NotificationService.init();
-
   runApp(const ProviderScope(child: TomatoManagerApp()));
 }
 
@@ -30,12 +24,15 @@ class TomatoManagerApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config = ref.watch(configProvider);
+    final config   = ref.watch(configProvider);
+    final isDark   = ref.watch(darkModeProvider);
 
     return MaterialApp(
       title: 'Tomato Manager',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light,
+      darkTheme: AppTheme.dark,
+      themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
       home: config == null ? const SetupScreen() : const MainShell(),
     );
   }

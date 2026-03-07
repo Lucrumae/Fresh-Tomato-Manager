@@ -28,9 +28,9 @@ class _PortForwardScreenState extends ConsumerState<PortForwardScreen> {
     final rules = ref.watch(portForwardProvider);
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        backgroundColor: AppTheme.surface,
+        backgroundColor: Theme.of(context).colorScheme.surface,
         title: Text('Port Forwarding', style: Theme.of(context).textTheme.titleLarge),
         actions: [
           TextButton(
@@ -55,9 +55,9 @@ class _PortForwardScreenState extends ConsumerState<PortForwardScreen> {
         ? const Center(child: CircularProgressIndicator())
         : rules.isEmpty
           ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.lan_rounded, size: 48, color: AppTheme.textMuted),
+              Icon(Icons.lan_rounded, size: 48, color: Theme.of(context).extension<AppColors>()!.textMuted),
               const SizedBox(height: 12),
-              Text('No port forwarding rules', style: TextStyle(color: AppTheme.textMuted)),
+              Text('No port forwarding rules', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)),
             ]))
           : ListView.separated(
               padding: const EdgeInsets.all(16),
@@ -78,7 +78,7 @@ class _PortForwardScreenState extends ConsumerState<PortForwardScreen> {
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
-      backgroundColor: AppTheme.surface,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
