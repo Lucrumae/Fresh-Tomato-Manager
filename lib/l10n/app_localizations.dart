@@ -93,6 +93,17 @@ class AppL10n {
   String get download => 'Download';
   String get delete   => 'Delete';
   String get newFolder => 'New Folder';
+  // ── Missing getters (used in screens) ────────────────────────────────────
+  String get blockDevice        => 'Block Device';
+  String get portForward        => 'Port Forwarding';
+  String get portForwardSubtitle=> 'Manage port forwarding rules';
+  String get rebootRouter       => 'Reboot Router';
+  String get rebootConfirm      => 'Reboot Router?';
+  String get rebootMessage      => 'The router will restart. You may lose connection for a minute.';
+  String get rebootSent         => 'Reboot command sent.';
+  String get disconnectMessage  => 'Return to login screen';
+  String get disconnectConfirm  => 'Disconnect?';
+
 }
 
 class _AppL10nDelegate extends LocalizationsDelegate<AppL10n> {
