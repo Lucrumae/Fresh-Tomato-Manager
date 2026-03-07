@@ -218,16 +218,16 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
         mode: SftpFileOpenMode.create | SftpFileOpenMode.write | SftpFileOpenMode.truncate);
 
       int sent = 0;
-      final stream = localFile.openRead();
-      final writer = remoteFile.write();
-
-      await for (final chunk in stream) {
-        writer.add(Uint8List.fromList(chunk));
+      final bytes = await localFile.readAsBytes();
+      const chunkSize = 32768; // 32KB chunks
+      for (int offset = 0; offset < bytes.length; offset += chunkSize) {
+        final end = (offset + chunkSize).clamp(0, bytes.length);
+        final chunk = bytes.sublist(offset, end);
+        await remoteFile.writeBytes(chunk, offset: offset);
         sent += chunk.length;
         setState(() => transfer.progress = fileSize > 0
           ? (sent / fileSize).clamp(0.0, 1.0) : 0.5);
       }
-      await writer.close();
       await remoteFile.close();
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
@@ -633,7 +633,7 @@ class _EntryRow extends StatelessWidget {
           ]),
         ),
       ),
-    ));
+    );
   }
 
   IconData _icon(String name) {

@@ -290,8 +290,8 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
           Container(
             height:36,
             decoration:BoxDecoration(
-              color:const Color(0xFF080C14),
-              border:Border(top:BorderSide(color:_brd))),
+              color:isDark?const Color(0xFF080C14):const Color(0xFFD8E0EC),
+              border:Border(top:BorderSide(color:brd))),
             child:ListView(
               scrollDirection:Axis.horizontal,
               padding:const EdgeInsets.symmetric(horizontal:6,vertical:5),
@@ -317,7 +317,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
           ),
           // Input bar
           Container(
-            color:_bar,
+            color:bar,
             padding:const EdgeInsets.fromLTRB(10,2,10,6),
             child:Row(children:[
               Text('# ',style:GoogleFonts.jetBrainsMono(
@@ -326,10 +326,10 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
                 controller:_input, focusNode:_focus, enabled:_conn,
                 style:GoogleFonts.jetBrainsMono(color:Colors.white,fontSize:13),
                 cursorColor:AppTheme.terminal,
-                decoration:const InputDecoration(
+                decoration:InputDecoration(
                   isDense:true,border:InputBorder.none,
                   enabledBorder:InputBorder.none,focusedBorder:InputBorder.none,
-                  filled:false,contentPadding:EdgeInsets.symmetric(vertical:8),
+                  filled:false,contentPadding:const EdgeInsets.symmetric(vertical:8),
                   hintText:'command...',
                   hintStyle:TextStyle(color:isDark?const Color(0xFF2E3F55):const Color(0xFF8A9AB5),fontSize:13)),
                 onSubmitted:_send, textInputAction:TextInputAction.send,
