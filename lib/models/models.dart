@@ -17,6 +17,7 @@ class RouterStatus {
     required this.uptime, required this.wanIp, required this.lanIp,
     required this.firmware, required this.routerModel,
     required this.wifiSsid, required this.isOnline,
+    this.cpuTempC = 0,
   });
 
   String get cpuTemp => cpuTempC > 0 ? '${cpuTempC.toStringAsFixed(1)}°C' : '-';

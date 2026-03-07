@@ -85,11 +85,17 @@ final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((r
 });
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
-class BandwidthScreen extends ConsumerWidget {
+class BandwidthScreen extends ConsumerStatefulWidget {
   const BandwidthScreen({super.key});
+  @override
+  ConsumerState<BandwidthScreen> createState() => _BandwidthScreenState();
+}
+
+class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
+  bool _showQos = false;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final bw = ref.watch(bandwidthProvider);
     final history = ref.watch(trafficHistoryProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
@@ -98,10 +104,38 @@ class BandwidthScreen extends ConsumerWidget {
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
-        title: Text('Bandwidth', style: Theme.of(context).textTheme.titleLarge),
         backgroundColor: Theme.of(context).colorScheme.surface,
-        actions: [
+        // Title = toggle tabs: Bandwidth | QoS
+        title: Row(mainAxisSize: MainAxisSize.min, children: [
+          GestureDetector(
+            onTap: () => setState(() => _showQos = false),
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 180),
+              style: !_showQos
+                ? Theme.of(context).textTheme.titleLarge!
+                : Theme.of(context).textTheme.titleLarge!.copyWith(
+                    color: c.textMuted, fontWeight: FontWeight.w400),
+              child: const Text('Bandwidth'),
+            ),
+          ),
           Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Container(width: 1, height: 18, color: c.border),
+          ),
+          GestureDetector(
+            onTap: () => setState(() => _showQos = true),
+            child: AnimatedDefaultTextStyle(
+              duration: const Duration(milliseconds: 180),
+              style: _showQos
+                ? Theme.of(context).textTheme.titleLarge!.copyWith(color: accent)
+                : Theme.of(context).textTheme.titleLarge!.copyWith(
+                    color: c.textMuted, fontWeight: FontWeight.w400),
+              child: const Text('QoS'),
+            ),
+          ),
+        ]),
+        actions: [
+          if (!_showQos) Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Row(children: [
               Container(width: 7, height: 7, decoration: const BoxDecoration(
@@ -111,9 +145,37 @@ class BandwidthScreen extends ConsumerWidget {
                 color: AppTheme.success, fontWeight: FontWeight.w600)),
             ]),
           ),
+          if (_showQos) IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: () {
+              ref.invalidate(qosBasicProvider);
+              ref.invalidate(qosClassifyProvider);
+              ref.invalidate(qosConnProvider);
+            },
+          ),
         ],
       ),
-      body: ListView(
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        child: _showQos
+          ? _QosFullPage(key: const ValueKey('qos'))
+          : _BandwidthBody(key: const ValueKey('bw'), bw: bw, history: history),
+      ),
+    );
+  }
+}
+
+// ── Bandwidth Body ────────────────────────────────────────────────────────────
+class _BandwidthBody extends StatelessWidget {
+  final BandwidthStats bw;
+  final AsyncValue<Map<String, dynamic>> history;
+  const _BandwidthBody({super.key, required this.bw, required this.history});
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
+    final c = Theme.of(context).extension<AppColors>()!;
+    return ListView(
         padding: const EdgeInsets.all(16),
         children: [
 
@@ -190,7 +252,6 @@ class BandwidthScreen extends ConsumerWidget {
           // ── QoS section ──────────────────────────────────────────────────
           _SectionHeader(title: 'QoS', icon: Icons.speed_rounded, color: accent),
           const SizedBox(height: 12),
-          _QosSection(),
           const SizedBox(height: 80),
         ],
       ),
@@ -432,57 +493,60 @@ class _HistoryBarChart extends StatelessWidget {
 }
 
 // ── QoS Section ───────────────────────────────────────────────────────────────
-class _QosSection extends ConsumerStatefulWidget {
+class _QosFullPage extends ConsumerStatefulWidget {
+  const _QosFullPage({super.key});
   @override
-  ConsumerState<_QosSection> createState() => _QosSectionState();
+  ConsumerState<_QosFullPage> createState() => _QosFullPageState();
 }
 
-class _QosSectionState extends ConsumerState<_QosSection> {
-  int _qosTab = 0; // 0=basic, 1=classification, 2=connections
+class _QosFullPageState extends ConsumerState<_QosFullPage> {
+  int _qosTab = 0;
 
   @override
   Widget build(BuildContext context) {
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c = Theme.of(context).extension<AppColors>()!;
 
-    return AppCard(
-      padding: EdgeInsets.zero,
-      child: Column(children: [
-        // Sub-tab selector
-        Padding(
-          padding: const EdgeInsets.all(12),
-          child: Row(children: [
-            for (int i = 0; i < 3; i++) ...[
-              if (i > 0) const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () => setState(() => _qosTab = i),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 180),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _qosTab == i ? accent.withOpacity(0.15) : c.cardBg,
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: _qosTab == i ? accent : c.border,
-                      width: _qosTab == i ? 1.5 : 1),
-                  ),
-                  child: Text(['Basic', 'Classification', 'Connections'][i],
-                    style: TextStyle(fontSize: 12,
-                      fontWeight: _qosTab == i ? FontWeight.w600 : FontWeight.normal,
-                      color: _qosTab == i ? accent : c.textSecondary)),
+    return Column(children: [
+      // Sub-tab bar
+      Container(
+        color: Theme.of(context).colorScheme.surface,
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+        child: Row(children: [
+          for (int i = 0; i < 3; i++) ...[
+            if (i > 0) const SizedBox(width: 8),
+            GestureDetector(
+              onTap: () => setState(() => _qosTab = i),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 180),
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
+                decoration: BoxDecoration(
+                  color: _qosTab == i ? accent.withOpacity(0.15) : c.cardBg,
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: _qosTab == i ? accent : c.border,
+                    width: _qosTab == i ? 1.5 : 1),
                 ),
+                child: Text(['Basic', 'Classification', 'Connections'][i],
+                  style: TextStyle(fontSize: 12,
+                    fontWeight: _qosTab == i ? FontWeight.w600 : FontWeight.normal,
+                    color: _qosTab == i ? accent : c.textSecondary)),
               ),
-            ],
-          ]),
-        ),
-        const Divider(height: 1),
-
-        // Tab content
-        if (_qosTab == 0) _QosBasicTab()
-        else if (_qosTab == 1) _QosClassifyTab()
-        else _QosConnectionsTab(),
-      ]),
-    );
+            ),
+          ],
+        ]),
+      ),
+      Divider(height: 1, color: c.border),
+      // Full remaining height for tab content
+      Expanded(child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 200),
+        child: _qosTab == 0
+          ? _QosBasicTab(key: const ValueKey(0))
+          : _qosTab == 1
+            ? _QosClassifyTab(key: const ValueKey(1))
+            : _QosConnectionsTab(key: const ValueKey(2)),
+      )),
+    ]);
   }
 }
 
@@ -536,7 +600,7 @@ class _QosClassifyTab extends ConsumerWidget {
           padding: const EdgeInsets.all(24),
           child: Text('No QoS rules configured', style: TextStyle(color: c.textMuted), textAlign: TextAlign.center));
         return Column(
-          children: list.map((r) {
+          children: list.map<Widget>((r) {
             final prio = r['prio'] ?? '5';
             final color = prioColors[prio] ?? accent;
             return Padding(
