@@ -343,10 +343,10 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16,12,8,8),
             child: Row(children: [
-              Icon(Icons.insert_drive_file_rounded, color: AppTheme.terminal, size: 16),
+              Icon(Icons.insert_drive_file_rounded, color: const Color(0xFF00E5A0), size: 16),
               const SizedBox(width: 8),
               Expanded(child: Text(title, style: GoogleFonts.jetBrainsMono(
-                color: AppTheme.terminal, fontSize: 13))),
+                color: const Color(0xFF00E5A0), fontSize: 13))),
               IconButton(icon: const Icon(Icons.close, size: 20),
                 onPressed: () => Navigator.pop(_)),
             ]),
@@ -416,7 +416,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
                       border: Border.all(color: _brd),
                     ),
                     child: Row(children: [
-                      Icon(Icons.folder_rounded, color: AppTheme.terminal, size: 14),
+                      Icon(Icons.folder_rounded, color: const Color(0xFF00E5A0), size: 14),
                       const SizedBox(width: 6),
                       Expanded(child: Text(_cwd,
                         style: GoogleFonts.jetBrainsMono(
@@ -434,7 +434,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       // Transfer progress overlay
       body: Stack(children: [
         _loading
-          ? const Center(child: CircularProgressIndicator(color: AppTheme.terminal))
+          ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5A0)))
           : _error != null
             ? _buildError()
             : _entries.isEmpty

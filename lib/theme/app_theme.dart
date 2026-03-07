@@ -44,9 +44,8 @@ class AppTheme {
   static const Color warning      = Color(0xFFF59E0B);
   static const Color danger       = Color(0xFFEF4444);
 
-  // ── Terminal accent — resolved at runtime via accentColor ─────────────────
-  // Default green
-  static Color terminal = AccentColor.green.main;
+  // Default accent color (const fallback)
+  static const Color terminal = Color(0xFF00E5A0);
 
   // ── Build theme with a given accent ──────────────────────────────────────
   static ThemeData light([AccentColor accent = AccentColor.green]) =>
@@ -128,6 +127,30 @@ class AppTheme {
         ),
       ),
       dividerTheme: DividerThemeData(color: bord, thickness: 1),
+      dialogTheme: DialogTheme(
+        backgroundColor: card,
+        surfaceTintColor: Colors.transparent,
+        titleTextStyle: GoogleFonts.inter(
+          fontSize: 17, fontWeight: FontWeight.w600, color: txtPri),
+        contentTextStyle: GoogleFonts.inter(
+          fontSize: 14, color: txtSec),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      ),
+      popupMenuTheme: PopupMenuThemeData(
+        color: card,
+        surfaceTintColor: Colors.transparent,
+        textStyle: GoogleFonts.inter(fontSize: 14, color: txtPri),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: bord),
+        ),
+      ),
+      snackBarTheme: SnackBarThemeData(
+        backgroundColor: isDark ? const Color(0xFF1E2235) : const Color(0xFF1A1D2E),
+        contentTextStyle: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        behavior: SnackBarBehavior.floating,
+      ),
       extensions: [
         AppColors(
           background: bg, surface: surf, cardBg: card, border: bord,

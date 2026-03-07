@@ -228,10 +228,21 @@ class _DeviceCard extends ConsumerWidget {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          title: Text(device.isBlocked ? 'Unblock Device' : 'Block Internet Access'),
-          content: Text(device.isBlocked
-            ? 'Allow ${device.displayName} to access the internet?'
-            : 'Block internet access for ${device.displayName}? They will stay connected to WiFi but cannot reach the internet.'),
+          title: Text(
+            device.isBlocked ? 'Unblock Device' : 'Block Internet Access',
+            style: TextStyle(
+              color: Theme.of(context).extension<AppColors>()!.textPrimary,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          content: Text(
+            device.isBlocked
+              ? 'Allow \${device.displayName} to access the internet?'
+              : 'Block internet access for \${device.displayName}? They will stay connected to WiFi but cannot reach the internet.',
+            style: TextStyle(
+              color: Theme.of(context).extension<AppColors>()!.textSecondary,
+            ),
+          ),
           actions: [
             TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
             ElevatedButton(
