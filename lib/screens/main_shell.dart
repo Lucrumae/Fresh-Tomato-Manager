@@ -35,30 +35,27 @@ class _MainShellState extends ConsumerState<MainShell> {
     final c = Theme.of(context).extension<AppColors>()!;
 
     final tabs = [
-      (Icons.dashboard_rounded,   l.dashboard),
-      (Icons.devices_rounded,     l.devices),
-      (Icons.show_chart_rounded,  l.bandwidth),
-      (Icons.article_rounded,     l.logs),
-      (Icons.terminal_rounded,    l.terminal),
-      (Icons.settings_rounded,    l.settings),
+      (Icons.dashboard_rounded,  l.dashboard),
+      (Icons.devices_rounded,    l.devices),
+      (Icons.show_chart_rounded, l.bandwidth),
+      (Icons.article_rounded,    l.logs),
+      (Icons.terminal_rounded,   l.terminal),
+      (Icons.settings_rounded,   l.settings),
     ];
 
-    if (_index == 4) {
-      return WillPopScope(
-        onWillPop: () async { setState(() => _index = 0); return false; },
-        child: const TerminalScreen(),
-      );
-    }
-
+    // Terminal is a Column widget so it needs a Scaffold with body only
+    // No WillPopScope needed - it's just another tab
     final screens = [
-      const DashboardScreen(), const DevicesScreen(),
-      const BandwidthScreen(), const LogsScreen(),
+      const DashboardScreen(),
+      const DevicesScreen(),
+      const BandwidthScreen(),
+      const LogsScreen(),
+      const _TerminalTab(),   // wrapped in Scaffold
       const SettingsScreen(),
     ];
-    final displayIndex = _index > 4 ? _index - 1 : _index;
 
     return Scaffold(
-      body: IndexedStack(index: displayIndex, children: screens),
+      body: IndexedStack(index: _index, children: screens),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: c.surface,
@@ -98,6 +95,19 @@ class _MainShellState extends ConsumerState<MainShell> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// Terminal tab wrapped in Scaffold agar AppBar tetap ada
+class _TerminalTab extends StatelessWidget {
+  const _TerminalTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Scaffold(
+      backgroundColor: Color(0xFF0D1117),
+      body: SafeArea(child: TerminalScreen()),
     );
   }
 }

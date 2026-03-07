@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:flutter/foundation.dart';
@@ -10,41 +9,32 @@ class SshService {
   TomatoConfig? _config;
   bool _connecting = false;
 
-  SSHClient? get client => _client;
-
   bool get isConnected => _client != null && !(_client!.isClosed);
+  SSHClient? get client => _client;
 
   // ── Connect ────────────────────────────────────────────────────────────────
   Future<String?> connect(TomatoConfig config) async {
-    // Returns null on success, error string on failure
     if (_connecting) return 'Already connecting...';
     _connecting = true;
     _config = config;
 
     try {
       await disconnect();
-
       final socket = await SSHSocket.connect(
-        config.host,
-        config.sshPort,
+        config.host, config.sshPort,
         timeout: const Duration(seconds: 10),
       );
-
       _client = SSHClient(
         socket,
         username: config.username,
         onPasswordRequest: () => config.password,
       );
-
-      // Authenticate
       await _client!.authenticated.timeout(
         const Duration(seconds: 10),
         onTimeout: () => throw Exception('Authentication timed out'),
       );
-
       _connecting = false;
-      return null; // success
-
+      return null;
     } on SSHAuthAbortError {
       _connecting = false;
       return 'Authentication failed — check username and password';
@@ -56,13 +46,10 @@ class SshService {
       _client = null;
       final msg = e.toString().replaceAll('Exception: ', '');
       if (msg.contains('Connection refused')) {
-        return 'SSH connection refused. Enable SSH in router: Administration → Admin Access → SSH';
+        return 'SSH connection refused. Enable SSH: Administration → Admin Access → SSH';
       }
       if (msg.contains('timed out') || msg.contains('timeout')) {
-        return 'Connection timed out. Check IP address and WiFi connection.';
-      }
-      if (msg.contains('No route') || msg.contains('Network')) {
-        return 'Cannot reach ${config.host}. Make sure you are connected to the router WiFi.';
+        return 'Connection timed out. Check IP and WiFi.';
       }
       return 'Connection error: $msg';
     }
@@ -80,11 +67,25 @@ class SshService {
       final session = await _client!.execute(command);
       final bytesList = await session.stdout.toList();
       final allBytes = bytesList.expand((b) => b).toList();
-      final output = String.fromCharCodes(Uint8List.fromList(allBytes));
       await session.done;
-      return output.trim();
+      return String.fromCharCodes(Uint8List.fromList(allBytes)).trim();
     } catch (e) {
       debugPrint('SSH run error [$command]: $e');
+      rethrow;
+    }
+  }
+
+  Future<String> runWithStderr(String command) async {
+    if (!isConnected) throw Exception('Not connected');
+    try {
+      final session = await _client!.execute(command);
+      final outBytes = await session.stdout.toList();
+      final errBytes = await session.stderr.toList();
+      await session.done;
+      final out = String.fromCharCodes(Uint8List.fromList(outBytes.expand((b) => b).toList()));
+      final err = String.fromCharCodes(Uint8List.fromList(errBytes.expand((b) => b).toList()));
+      return (out + err).trim();
+    } catch (e) {
       rethrow;
     }
   }
@@ -92,12 +93,11 @@ class SshService {
   // ── Router Status ──────────────────────────────────────────────────────────
   Future<RouterStatus> getStatus() async {
     try {
-      // Run all commands in one SSH session for efficiency
       final output = await run('''
 echo "=CPU="
 cat /proc/stat | head -1
 echo "=MEM="
-cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|Cached"
+cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|^Cached"
 echo "=UPTIME="
 cat /proc/uptime
 echo "=NVRAM="
@@ -107,7 +107,6 @@ nvram get wl0_ssid
 nvram get t_model_name
 nvram get os_version
 ''');
-
       return _parseStatus(output);
     } catch (e) {
       debugPrint('getStatus error: $e');
@@ -117,28 +116,18 @@ nvram get os_version
 
   RouterStatus _parseStatus(String raw) {
     try {
-      final sections = <String, List<String>>{};
-      String? current;
-      for (final line in raw.split('\n')) {
-        final t = line.trim();
-        if (t.startsWith('=') && t.endsWith('=')) {
-          current = t.replaceAll('=', '');
-          sections[current] = [];
-        } else if (current != null && t.isNotEmpty) {
-          sections[current]!.add(t);
-        }
-      }
+      final sections = _parseSections(raw);
 
-      // CPU %
+      // CPU
       double cpuPercent = 0;
       final cpuLine = sections['CPU']?.firstOrNull ?? '';
       final cpuParts = cpuLine.split(RegExp(r'\s+'));
-      if (cpuParts.length >= 8) {
-        final user = int.tryParse(cpuParts[1]) ?? 0;
-        final nice = int.tryParse(cpuParts[2]) ?? 0;
+      if (cpuParts.length >= 5) {
+        final user   = int.tryParse(cpuParts[1]) ?? 0;
+        final nice   = int.tryParse(cpuParts[2]) ?? 0;
         final system = int.tryParse(cpuParts[3]) ?? 0;
-        final idle = int.tryParse(cpuParts[4]) ?? 0;
-        final total = user + nice + system + idle;
+        final idle   = int.tryParse(cpuParts[4]) ?? 0;
+        final total  = user + nice + system + idle;
         if (total > 0) cpuPercent = (user + nice + system) / total * 100;
       }
 
@@ -147,16 +136,15 @@ nvram get os_version
       for (final line in sections['MEM'] ?? []) {
         final parts = line.split(':');
         if (parts.length == 2) {
-          final key = parts[0].trim();
           final val = int.tryParse(parts[1].trim().split(' ')[0]) ?? 0;
-          memMap[key] = val;
+          memMap[parts[0].trim()] = val;
         }
       }
       final memTotal = memMap['MemTotal'] ?? 0;
-      final memFree = memMap['MemFree'] ?? 0;
-      final buffers = memMap['Buffers'] ?? 0;
-      final cached = memMap['Cached'] ?? 0;
-      final memUsed = memTotal - memFree - buffers - cached;
+      final memFree  = memMap['MemFree'] ?? 0;
+      final buffers  = memMap['Buffers'] ?? 0;
+      final cached   = memMap['Cached'] ?? 0;
+      final memUsed  = memTotal - memFree - buffers - cached;
 
       // Uptime
       String uptime = '-';
@@ -169,9 +157,7 @@ nvram get os_version
         uptime = d > 0 ? '${d}d ${h}h ${m}m' : '${h}h ${m}m';
       }
 
-      // NVRAM values (in order)
       final nvram = sections['NVRAM'] ?? [];
-
       return RouterStatus(
         cpuPercent: cpuPercent.clamp(0, 100),
         ramUsedMB: (memUsed / 1024).round(),
@@ -180,12 +166,11 @@ nvram get os_version
         wanIp: nvram.length > 0 ? nvram[0] : '-',
         lanIp: nvram.length > 1 ? nvram[1] : '-',
         wifiSsid: nvram.length > 2 ? nvram[2] : '-',
-        routerModel: nvram.length > 3 ? nvram[3] : 'FreshTomato Router',
+        routerModel: nvram.length > 3 ? nvram[3] : 'FreshTomato',
         firmware: nvram.length > 4 ? nvram[4] : '-',
         isOnline: true,
       );
     } catch (e) {
-      debugPrint('_parseStatus error: $e');
       return RouterStatus.empty();
     }
   }
@@ -193,15 +178,19 @@ nvram get os_version
   // ── Devices ────────────────────────────────────────────────────────────────
   Future<List<ConnectedDevice>> getDevices() async {
     try {
-      final output = await run('''
+      // FreshTomato: gunakan wl -i untuk list wireless clients + /proc/net/arp
+      final output = await run(r'''
 echo "=ARP="
 cat /proc/net/arp
-echo "=WL="
-wl assoclist 2>/dev/null || echo ""
+echo "=WL0="
+wl -i eth1 assoclist 2>/dev/null || wl assoclist 2>/dev/null || echo ""
+echo "=WL1="
+wl -i eth2 assoclist 2>/dev/null || echo ""
+echo "=NAMES="
+nvram get dhcp_static_leases 2>/dev/null || echo ""
 echo "=BLOCK="
-nvram get block_mac 2>/dev/null || echo ""
+iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC //' || echo ""
 ''');
-
       return _parseDevices(output);
     } catch (e) {
       debugPrint('getDevices error: $e');
@@ -213,17 +202,27 @@ nvram get block_mac 2>/dev/null || echo ""
     final devices = <ConnectedDevice>[];
     final sections = _parseSections(raw);
 
-    // Blocked MACs
-    final blockedMacs = (sections['BLOCK']?.firstOrNull ?? '')
-        .split(' ')
-        .map((m) => m.trim().toUpperCase())
-        .toSet();
+    // Blocked MACs dari iptables
+    final blockedMacs = <String>{};
+    for (final line in sections['BLOCK'] ?? []) {
+      final m = RegExp(r'([0-9A-Fa-f:]{17})').firstMatch(line);
+      if (m != null) blockedMacs.add(m.group(1)!.toUpperCase());
+    }
 
-    // Wireless clients from wl assoclist
+    // Wireless MACs
     final wlMacs = <String>{};
-    for (final line in sections['WL'] ?? []) {
+    for (final line in [...(sections['WL0'] ?? []), ...(sections['WL1'] ?? [])]) {
       final m = RegExp(r'([0-9A-Fa-f:]{17})').firstMatch(line);
       if (m != null) wlMacs.add(m.group(1)!.toUpperCase());
+    }
+
+    // DHCP static leases untuk nama (format: MAC:IP:hostname:lease>...)
+    final nameMap = <String, String>{};
+    for (final entry in (sections['NAMES']?.firstOrNull ?? '').split('>')) {
+      final parts = entry.split(':');
+      if (parts.length >= 3) {
+        nameMap[parts[0].toUpperCase()] = parts[2];
+      }
     }
 
     // ARP table
@@ -231,42 +230,35 @@ nvram get block_mac 2>/dev/null || echo ""
       if (line.startsWith('IP') || line.trim().isEmpty) continue;
       final parts = line.split(RegExp(r'\s+'));
       if (parts.length < 4) continue;
-      final ip = parts[0];
+      final ip  = parts[0];
       final mac = parts[3].toUpperCase();
-      if (mac == '00:00:00:00:00:00' || mac == '') continue;
-
+      if (mac == '00:00:00:00:00:00' || mac.isEmpty || mac == '(INCOMPLETE)') continue;
       final iface = parts.length > 5 ? parts[5] : 'br0';
-      final isWifi = wlMacs.contains(mac);
 
       devices.add(ConnectedDevice(
-        mac: mac,
-        ip: ip,
-        name: '',
-        interface: isWifi ? 'wl0' : iface,
+        mac: mac, ip: ip,
+        name: nameMap[mac] ?? '',
+        interface: wlMacs.contains(mac) ? 'wl0' : iface,
         rssi: '-',
         isBlocked: blockedMacs.contains(mac),
         lastSeen: DateTime.now(),
       ));
     }
-
     return devices;
   }
 
   // ── Bandwidth ──────────────────────────────────────────────────────────────
   Future<Map<String, int>> getBandwidthRaw() async {
     try {
-      // Get WAN interface name first
-      final wan = await run("nvram get wan_iface 2>/dev/null || echo 'eth0'");
-      final wanIface = wan.trim().isEmpty ? 'eth0' : wan.trim();
-      final output = await run("cat /proc/net/dev | grep '$wanIface'");
-
-      // Format: iface: rx_bytes ... tx_bytes
-      final parts = output.split(RegExp(r'\s+'));
-      if (parts.length >= 10) {
-        final rx = int.tryParse(parts[1].replaceAll('${wanIface}:', '')) ??
-                   int.tryParse(parts[1]) ?? 0;
-        final tx = int.tryParse(parts[9]) ?? 0;
-        return {'rx': rx, 'tx': tx};
+      final wan = (await run("nvram get wan_iface 2>/dev/null || echo 'vlan2'")).trim();
+      final wanIface = wan.isEmpty ? 'vlan2' : wan;
+      // Try WAN iface first, fallback to br0
+      final output = await run("cat /proc/net/dev | grep -E '$wanIface|br0' | head -1");
+      final line = output.split('\n').first;
+      final clean = line.replaceAll(RegExp(r'^[^:]+:'), '').trim();
+      final parts = clean.split(RegExp(r'\s+'));
+      if (parts.length >= 9) {
+        return {'rx': int.tryParse(parts[0]) ?? 0, 'tx': int.tryParse(parts[8]) ?? 0};
       }
       return {'rx': 0, 'tx': 0};
     } catch (e) {
@@ -274,29 +266,21 @@ nvram get block_mac 2>/dev/null || echo ""
     }
   }
 
-  // ── Block/Unblock device ───────────────────────────────────────────────────
+  // ── Block/Unblock ──────────────────────────────────────────────────────────
   Future<bool> blockDevice(String mac, bool block) async {
     try {
+      final macLower = mac.toLowerCase();
       if (block) {
-        // Add iptables rule to drop traffic from this MAC
-        await run('iptables -I FORWARD -m mac --mac-source $mac -j DROP 2>/dev/null');
-        // Also save to NVRAM
-        final current = await run('nvram get block_mac');
-        final macs = current.trim().isEmpty
-            ? <String>[]
-            : current.trim().split(' ');
-        if (!macs.contains(mac)) {
-          macs.add(mac);
-          await run("nvram set block_mac='${macs.join(' ')}' && nvram commit");
-        }
+        // Add iptables rule - block both directions
+        await run('iptables -I FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null; '
+                  'iptables -I FORWARD -m mac --mac-source ${mac.toUpperCase()} -j DROP 2>/dev/null');
+        debugPrint('Blocked $mac');
       } else {
-        // Remove iptables rule
-        await run('iptables -D FORWARD -m mac --mac-source $mac -j DROP 2>/dev/null');
-        // Remove from NVRAM
-        final current = await run('nvram get block_mac');
-        final macs = current.trim().split(' ')
-            .where((m) => m.trim() != mac).toList();
-        await run("nvram set block_mac='${macs.join(' ')}' && nvram commit");
+        // Remove all rules for this MAC
+        await run('iptables -D FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null; '
+                  'iptables -D FORWARD -m mac --mac-source ${mac.toUpperCase()} -j DROP 2>/dev/null; '
+                  'iptables -D FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null');
+        debugPrint('Unblocked $mac');
       }
       return true;
     } catch (e) {
@@ -307,48 +291,82 @@ nvram get block_mac 2>/dev/null || echo ""
 
   // ── Reboot ─────────────────────────────────────────────────────────────────
   Future<bool> reboot() async {
-    try {
-      await run('reboot');
-      return true;
-    } catch (_) {
-      return false;
-    }
+    try { await run('reboot'); return true; } catch (_) { return false; }
   }
 
   // ── Logs ──────────────────────────────────────────────────────────────────
   Future<List<LogEntry>> getLogs() async {
     try {
-      final output = await run('logread | tail -200');
-      final entries = <LogEntry>[];
-      for (final line in output.split('\n')) {
-        if (line.trim().isEmpty) continue;
-        // Format: "Mon Jan  1 00:00:00 2024 daemon.info process: message"
-        final match = RegExp(
-          r'^(\w+ \w+ +\d+ \d+:\d+:\d+ \d+) (\S+)\.(\S+) ([^:]+): (.*)'
-        ).firstMatch(line);
-        if (match != null) {
-          entries.add(LogEntry(
-            time: _parseLogTime(match.group(1) ?? ''),
-            process: match.group(4) ?? '-',
-            level: match.group(3) ?? 'info',
-            message: match.group(5) ?? line,
-          ));
-        } else {
-          entries.add(LogEntry(
-            time: DateTime.now(),
-            process: '-',
-            level: 'info',
-            message: line,
-          ));
-        }
-      }
-      return entries.reversed.toList();
+      // FreshTomato stores logs in /var/log/messages or via logread
+      final output = await runWithStderr(
+        'logread 2>/dev/null || cat /var/log/messages 2>/dev/null || dmesg 2>/dev/null | tail -100'
+      );
+      if (output.trim().isEmpty) return [];
+      return _parseLogs(output);
     } catch (e) {
+      debugPrint('getLogs error: $e');
       return [];
     }
   }
 
-  // ── QoS (via iptables/tc) ─────────────────────────────────────────────────
+  List<LogEntry> _parseLogs(String raw) {
+    final entries = <LogEntry>[];
+    for (final line in raw.split('\n')) {
+      if (line.trim().isEmpty) continue;
+      // Format 1: "Jan  1 00:00:00 hostname daemon.info process: message"
+      final match1 = RegExp(
+        r'^(\w+ +\d+ \d+:\d+:\d+) \S+ (\S+)\.(\S+) ([^:]+): (.*)'
+      ).firstMatch(line);
+      if (match1 != null) {
+        entries.add(LogEntry(
+          time: _tryParseTime(match1.group(1) ?? ''),
+          process: match1.group(4) ?? '-',
+          level: match1.group(3) ?? 'info',
+          message: match1.group(5) ?? line,
+        ));
+        continue;
+      }
+      // Format 2: dmesg "[   0.000000] message"
+      final match2 = RegExp(r'^\[\s*[\d.]+\] (.*)').firstMatch(line);
+      if (match2 != null) {
+        entries.add(LogEntry(
+          time: DateTime.now(),
+          process: 'kernel',
+          level: 'info',
+          message: match2.group(1) ?? line,
+        ));
+        continue;
+      }
+      // Fallback
+      entries.add(LogEntry(
+        time: DateTime.now(), process: '-', level: 'info', message: line,
+      ));
+    }
+    return entries.reversed.toList();
+  }
+
+  DateTime _tryParseTime(String s) {
+    try {
+      final now = DateTime.now();
+      // "Mar  7 11:13:40" → parse with current year
+      final parts = s.trim().split(RegExp(r'\s+'));
+      if (parts.length >= 3) {
+        final months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
+                        'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12};
+        final month = months[parts[0]] ?? 1;
+        final day   = int.tryParse(parts[1]) ?? 1;
+        final time  = parts[2].split(':');
+        return DateTime(now.year, month, day,
+          int.tryParse(time[0]) ?? 0,
+          int.tryParse(time[1]) ?? 0,
+          int.tryParse(time[2]) ?? 0,
+        );
+      }
+    } catch (_) {}
+    return DateTime.now();
+  }
+
+  // ── QoS ───────────────────────────────────────────────────────────────────
   Future<List<QosRule>> getQosRules() async {
     try {
       final output = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
@@ -364,9 +382,7 @@ nvram get block_mac 2>/dev/null || echo ""
           enabled: true,
         );
       }).toList();
-    } catch (e) {
-      return [];
-    }
+    } catch (e) { return []; }
   }
 
   Future<bool> saveQosRule(QosRule rule) async {
@@ -417,7 +433,7 @@ nvram get block_mac 2>/dev/null || echo ""
     String? current;
     for (final line in raw.split('\n')) {
       final t = line.trim();
-      if (t.startsWith('=') && t.endsWith('=')) {
+      if (t.startsWith('=') && t.endsWith('=') && t.length > 2) {
         current = t.replaceAll('=', '');
         sections[current] = [];
       } else if (current != null && t.isNotEmpty) {
@@ -425,13 +441,5 @@ nvram get block_mac 2>/dev/null || echo ""
       }
     }
     return sections;
-  }
-
-  DateTime _parseLogTime(String s) {
-    try {
-      return DateTime.parse(s);
-    } catch (_) {
-      return DateTime.now();
-    }
   }
 }

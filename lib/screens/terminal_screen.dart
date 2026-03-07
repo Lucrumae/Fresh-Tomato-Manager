@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:dartssh2/dartssh2.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -15,17 +14,17 @@ class TerminalScreen extends ConsumerStatefulWidget {
 }
 
 class _TerminalScreenState extends ConsumerState<TerminalScreen> {
-  final _inputCtrl   = TextEditingController();
-  final _scrollCtrl  = ScrollController();
-  final _focusNode   = FocusNode();
-  final _lines       = <_TermLine>[];
+  final _inputCtrl  = TextEditingController();
+  final _scrollCtrl = ScrollController();
+  final _focusNode  = FocusNode();
+  final _lines      = <_TermLine>[];
   SSHSession? _session;
-  bool _connecting = false;
-  bool _connected  = false;
-  String _prompt   = '# ';
+  bool _connecting  = false;
+  bool _connected   = false;
   StreamSubscription? _stdoutSub;
-  StreamSubscription? _stderrSub;
-  String _buffer = '';
+  String _buffer    = '';
+  final _cmdHistory = <String>[];
+  int _historyIdx   = -1;
 
   @override
   void initState() {
@@ -36,7 +35,6 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   @override
   void dispose() {
     _stdoutSub?.cancel();
-    _stderrSub?.cancel();
     _session?.close();
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
@@ -45,77 +43,53 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   }
 
   Future<void> _startShell() async {
-    setState(() { _connecting = true; });
+    setState(() { _connecting = true; _lines.clear(); });
     _addLine('Connecting to SSH shell...', type: _LineType.system);
 
     try {
       final ssh = ref.read(sshServiceProvider);
-      if (!ssh.isConnected) {
+      if (!ssh.isConnected || ssh.client == null) {
         _addLine('Not connected. Go back and reconnect.', type: _LineType.error);
-        setState(() { _connecting = false; });
+        setState(() => _connecting = false);
         return;
       }
 
-      final client = ssh.client;
-      if (client == null) {
-        _addLine('SSH client not available.', type: _LineType.error);
-        setState(() { _connecting = false; });
-        return;
-      }
-
-      _session = await client.shell(
-        pty: SSHPtyConfig(
-          width: 80, height: 24,
-          type: 'xterm-256color',
-        ),
+      _session = await ssh.client!.shell(
+        pty: SSHPtyConfig(width: 80, height: 24, type: 'xterm-256color'),
       );
 
       setState(() { _connecting = false; _connected = true; });
-      _addLine('Connected! Type commands below.', type: _LineType.system);
-      _addLine('', type: _LineType.system);
 
-      // Stream stdout
-      _stdoutSub = _session!.stdout.listen(
-        (data) => _onData(data),
+      _stdoutSub = _session!.stdout.listen((data) => _onData(data),
         onDone: () {
           if (mounted) {
-            _addLine('\n[Session closed]', type: _LineType.system);
+            _addLine('[Session closed]', type: _LineType.system);
             setState(() => _connected = false);
           }
         },
       );
-
-      // Stream stderr
-      _stderrSub = _session!.stderr.listen(
-        (data) => _onData(data, isError: true),
-      );
+      _session!.stderr.listen((data) => _onData(data, isError: true));
 
     } catch (e) {
       _addLine('Error: $e', type: _LineType.error);
-      setState(() { _connecting = false; });
+      setState(() => _connecting = false);
     }
   }
 
   void _onData(Uint8List data, {bool isError = false}) {
-    final text = String.fromCharCodes(data);
+    var text = String.fromCharCodes(data);
     // Strip ANSI escape codes
-    final clean = text.replaceAll(RegExp(r'\x1B\[[0-9;]*[mGKHF]'), '')
-                      .replaceAll(RegExp(r'\x1B\[[0-9;]*[ABCD]'), '')
-                      .replaceAll(RegExp(r'\x1B\[?\d*[A-Za-z]'), '');
+    text = text.replaceAll(RegExp(r'\x1B\[[0-9;]*[mGKHFJABCDsuhl]'), '')
+               .replaceAll(RegExp(r'\x1B\([AB]'), '')
+               .replaceAll(RegExp(r'\r'), '');
 
-    _buffer += clean;
-
-    // Split on newlines
+    _buffer += text;
     final parts = _buffer.split('\n');
-    _buffer = parts.removeLast(); // keep incomplete line in buffer
+    _buffer = parts.removeLast();
 
     for (final part in parts) {
-      if (part.trim().isNotEmpty || _lines.isNotEmpty) {
-        _addLine(part, type: isError ? _LineType.error : _LineType.output);
-      }
+      _addLine(part, type: isError ? _LineType.error : _LineType.output);
     }
-
-    // Flush remaining buffer as partial line
     if (_buffer.isNotEmpty) {
       _addLine(_buffer, type: _LineType.output, partial: true);
       _buffer = '';
@@ -125,29 +99,26 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
   void _addLine(String text, {required _LineType type, bool partial = false}) {
     if (!mounted) return;
     setState(() {
-      // Replace last line if it was partial
       if (_lines.isNotEmpty && _lines.last.partial) {
-        _lines.last = _TermLine(text: _lines.last.text + text, type: type, partial: partial);
+        _lines[_lines.length - 1] = _TermLine(
+          text: _lines.last.text + text, type: type, partial: partial);
       } else {
-        // Split long output into multiple lines
-        final parts = text.split('\n');
-        for (int i = 0; i < parts.length; i++) {
-          _lines.add(_TermLine(
-            text: parts[i],
-            type: type,
-            partial: i == parts.length - 1 && partial,
-          ));
+        for (final part in text.split('\n')) {
+          _lines.add(_TermLine(text: part, type: type, partial: false));
         }
       }
-      // Keep max 500 lines
       if (_lines.length > 500) _lines.removeRange(0, _lines.length - 500);
     });
     _scrollToBottom();
   }
 
   void _send(String cmd) {
-    if (!_connected || _session == null) return;
-    _addLine('$_prompt$cmd', type: _LineType.input);
+    if (!_connected || _session == null || cmd.trim().isEmpty) return;
+    if (_cmdHistory.isEmpty || _cmdHistory.last != cmd) {
+      _cmdHistory.add(cmd);
+      if (_cmdHistory.length > 50) _cmdHistory.removeAt(0);
+    }
+    _historyIdx = -1;
     _session!.stdin.add(Uint8List.fromList('$cmd\n'.codeUnits));
     _inputCtrl.clear();
     _scrollToBottom();
@@ -158,134 +129,162 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
           _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 100),
+          duration: const Duration(milliseconds: 80),
           curve: Curves.easeOut,
         );
       }
     });
   }
 
-  // Quick command buttons
-  final _quickCmds = const [
-    ('top -bn1', 'top'),
+  void _historyUp() {
+    if (_cmdHistory.isEmpty) return;
+    setState(() {
+      _historyIdx = (_historyIdx + 1).clamp(0, _cmdHistory.length - 1);
+      _inputCtrl.text = _cmdHistory[_cmdHistory.length - 1 - _historyIdx];
+      _inputCtrl.selection = TextSelection.collapsed(offset: _inputCtrl.text.length);
+    });
+  }
+
+  void _historyDown() {
+    if (_historyIdx <= 0) {
+      setState(() { _historyIdx = -1; _inputCtrl.clear(); });
+      return;
+    }
+    setState(() {
+      _historyIdx--;
+      _inputCtrl.text = _cmdHistory[_cmdHistory.length - 1 - _historyIdx];
+      _inputCtrl.selection = TextSelection.collapsed(offset: _inputCtrl.text.length);
+    });
+  }
+
+  static const _quickCmds = [
+    ('top -bn1 | head -20', 'top'),
     ('free -m', 'free'),
     ('df -h', 'df'),
-    ('ip a', 'ip a'),
+    ('ip addr', 'ip'),
     ('arp -a', 'arp'),
-    ('logread | tail -20', 'logs'),
+    ('logread | tail -30', 'logs'),
     ('uptime', 'uptime'),
-    ('clear', 'clear'),
+    ('ls /tmp', 'ls'),
   ];
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.terminalBg,
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF161B22),
-        title: Row(children: [
-          Container(width: 10, height: 10, decoration: BoxDecoration(
-            color: _connected ? AppTheme.terminal : Colors.red,
-            shape: BoxShape.circle,
-          )),
-          const SizedBox(width: 8),
-          Text('Terminal',
-            style: GoogleFonts.jetBrainsMono(
-              color: AppTheme.terminal, fontSize: 16, fontWeight: FontWeight.w600,
-            )),
-        ]),
-        iconTheme: const IconThemeData(color: AppTheme.terminal),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: AppTheme.terminal),
-            onPressed: () {
-              setState(() { _lines.clear(); _connected = false; });
+    final termBg   = const Color(0xFF0D1117);
+    final termBar  = const Color(0xFF161B22);
+    final termBord = const Color(0xFF30363D);
+
+    return Column(
+      children: [
+        // ── Header bar ────────────────────────────────────────────────────
+        Container(
+          color: termBar,
+          padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+          child: Row(children: [
+            Container(
+              width: 8, height: 8,
+              decoration: BoxDecoration(
+                color: _connected ? AppTheme.terminal : Colors.red,
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text('Terminal',
+              style: GoogleFonts.jetBrainsMono(
+                color: AppTheme.terminal, fontSize: 14, fontWeight: FontWeight.w600,
+              )),
+            const Spacer(),
+            // History up/down
+            _headerBtn(Icons.arrow_upward_rounded, _historyUp),
+            _headerBtn(Icons.arrow_downward_rounded, _historyDown),
+            _headerBtn(Icons.refresh_rounded, () {
               _session?.close();
+              _stdoutSub?.cancel();
+              setState(() { _connected = false; });
               _startShell();
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.cleaning_services_rounded, color: AppTheme.terminal),
-            onPressed: () => setState(() => _lines.clear()),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          // Terminal output
-          Expanded(
+            }),
+            _headerBtn(Icons.cleaning_services_rounded,
+              () => setState(() => _lines.clear())),
+          ]),
+        ),
+
+        // ── Terminal output ───────────────────────────────────────────────
+        Expanded(
+          child: Container(
+            color: termBg,
             child: _connecting
               ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                  const CircularProgressIndicator(color: AppTheme.terminal),
-                  const SizedBox(height: 16),
-                  Text('Starting shell...', style: GoogleFonts.jetBrainsMono(color: AppTheme.terminal)),
+                  const CircularProgressIndicator(color: AppTheme.terminal, strokeWidth: 2),
+                  const SizedBox(height: 12),
+                  Text('Starting shell...',
+                    style: GoogleFonts.jetBrainsMono(color: AppTheme.terminal, fontSize: 13)),
                 ]))
               : SelectableRegion(
                   focusNode: FocusNode(),
                   selectionControls: materialTextSelectionControls,
                   child: ListView.builder(
                     controller: _scrollCtrl,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
                     itemCount: _lines.length,
                     itemBuilder: (ctx, i) => _buildLine(_lines[i]),
                   ),
                 ),
           ),
+        ),
 
-          // Quick commands
-          Container(
-            height: 36,
-            color: const Color(0xFF161B22),
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              children: _quickCmds.map((cmd) => Padding(
-                padding: const EdgeInsets.only(right: 6),
-                child: GestureDetector(
-                  onTap: () => _send(cmd.$1),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
-                    decoration: BoxDecoration(
-                      border: Border.all(color: AppTheme.terminal.withOpacity(0.4)),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(cmd.$2,
-                      style: GoogleFonts.jetBrainsMono(
-                        color: AppTheme.terminal, fontSize: 11,
-                      )),
+        // ── Quick commands scrollable ──────────────────────────────────────
+        Container(
+          height: 34,
+          color: termBar,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            children: _quickCmds.map((cmd) => Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: GestureDetector(
+                onTap: () => _send(cmd.$1),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
+                  decoration: BoxDecoration(
+                    border: Border.all(color: AppTheme.terminal.withOpacity(0.35)),
+                    borderRadius: BorderRadius.circular(4),
                   ),
+                  child: Text(cmd.$2,
+                    style: GoogleFonts.jetBrainsMono(
+                      color: AppTheme.terminal, fontSize: 11)),
                 ),
-              )).toList(),
-            ),
+              ),
+            )).toList(),
           ),
+        ),
 
-          // Input bar
-          Container(
-            color: const Color(0xFF161B22),
-            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+        // ── Input bar ─────────────────────────────────────────────────────
+        Container(
+          color: termBar,
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          child: Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D1117),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: termBord),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2),
             child: Row(children: [
-              Text(_prompt, style: GoogleFonts.jetBrainsMono(
-                color: AppTheme.terminal, fontSize: 14, fontWeight: FontWeight.bold,
-              )),
-              const SizedBox(width: 6),
+              Text('# ', style: GoogleFonts.jetBrainsMono(
+                color: AppTheme.terminal, fontSize: 14, fontWeight: FontWeight.bold)),
               Expanded(
                 child: TextField(
                   controller: _inputCtrl,
                   focusNode: _focusNode,
-                  autofocus: true,
                   enabled: _connected,
-                  style: GoogleFonts.jetBrainsMono(
-                    color: Colors.white, fontSize: 14,
-                  ),
+                  style: GoogleFonts.jetBrainsMono(color: Colors.white, fontSize: 13),
                   decoration: const InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
+                    isDense: true, border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
-                    filled: false,
-                    contentPadding: EdgeInsets.zero,
+                    filled: false, contentPadding: EdgeInsets.zero,
                     hintText: 'enter command...',
-                    hintStyle: TextStyle(color: Color(0xFF555A72), fontSize: 14),
+                    hintStyle: TextStyle(color: Color(0xFF555A72), fontSize: 13),
                   ),
                   onSubmitted: _send,
                   textInputAction: TextInputAction.send,
@@ -293,35 +292,36 @@ class _TerminalScreenState extends ConsumerState<TerminalScreen> {
               ),
               GestureDetector(
                 onTap: () => _send(_inputCtrl.text),
-                child: const Icon(Icons.send_rounded, color: AppTheme.terminal, size: 20),
+                child: const Icon(Icons.send_rounded, color: AppTheme.terminal, size: 18),
               ),
             ]),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
+
+  Widget _headerBtn(IconData icon, VoidCallback onTap) => GestureDetector(
+    onTap: onTap,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      child: Icon(icon, color: AppTheme.terminal.withOpacity(0.7), size: 18),
+    ),
+  );
 
   Widget _buildLine(_TermLine line) {
     Color color;
     switch (line.type) {
-      case _LineType.input:  color = Colors.white; break;
       case _LineType.output: color = const Color(0xFFCDD6F4); break;
       case _LineType.error:  color = const Color(0xFFF38BA8); break;
-      case _LineType.system: color = AppTheme.terminal.withOpacity(0.7); break;
+      case _LineType.system: color = AppTheme.terminal.withOpacity(0.6); break;
     }
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 1),
-      child: Text(
-        line.text,
-        style: GoogleFonts.jetBrainsMono(fontSize: 13, color: color, height: 1.4),
-      ),
-    );
+    return Text(line.text,
+      style: GoogleFonts.jetBrainsMono(fontSize: 12.5, color: color, height: 1.5));
   }
 }
 
-enum _LineType { input, output, error, system }
+enum _LineType { output, error, system }
 
 class _TermLine {
   final String text;
