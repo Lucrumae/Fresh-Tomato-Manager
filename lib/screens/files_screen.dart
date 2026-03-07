@@ -125,7 +125,6 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   // ── Download ───────────────────────────────────────────────────────────────
   Future<void> _download(_FsEntry entry) async {
-    // Request storage permission with dialog
     if (Platform.isAndroid) {
       if (!await _ensureStoragePermission()) return;
     }
@@ -137,12 +136,14 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      // Read file via SFTP
       final sftp = await ssh.client!.sftp();
       final remoteFile = await sftp.open(entry.path, mode: SftpFileOpenMode.read);
-      final fileSize = entry.size > 0 ? entry.size : 1;
 
-      // Save to downloads directory
+      // Get real file size via stat
+      final stat = await remoteFile.stat();
+      final fileSize = stat.size ?? (entry.size > 0 ? entry.size : 0);
+
+      // Prepare local save path
       Directory saveDir;
       if (Platform.isAndroid) {
         saveDir = Directory('/storage/emulated/0/Download/TomatoManager');
@@ -153,20 +154,34 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       await saveDir.create(recursive: true);
 
       final localPath = '${saveDir.path}/${entry.name}';
-      final localFile = File(localPath);
-      final sink = localFile.openWrite();
+      final sink = File(localPath).openWrite();
 
-      int received = 0;
-      await for (final chunk in remoteFile.read()) {
+      // Read in 64KB chunks with explicit offset tracking
+      const chunkSize = 65536;
+      int offset = 0;
+
+      while (true) {
+        final chunk = await remoteFile.readBytes(
+          length: chunkSize,
+          offset: offset,
+        );
+        if (chunk.isEmpty) break;
         sink.add(chunk);
-        received += chunk.length;
-        setState(() => transfer.progress = (received / fileSize).clamp(0.0, 1.0));
+        offset += chunk.length;
+        if (fileSize > 0) {
+          setState(() => transfer.progress = (offset / fileSize).clamp(0.0, 1.0));
+        } else {
+          // Unknown size — pulse animation
+          setState(() => transfer.progress = -1);
+        }
+        if (chunk.length < chunkSize) break; // last chunk
       }
+
+      await sink.flush();
       await sink.close();
       await remoteFile.close();
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text('✓ Disimpan ke: $localPath'),
@@ -179,8 +194,6 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
         SnackBar(content: Text('Download gagal: $e'),
           backgroundColor: AppTheme.danger));
     }
-
-    // Remove transfer after 3s
     await Future.delayed(const Duration(seconds: 3));
     if (mounted) setState(() => _transfers.remove(transfer));
   }
@@ -214,16 +227,18 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final remoteFile = await sftp.open(remotePath,
         mode: SftpFileOpenMode.create | SftpFileOpenMode.write | SftpFileOpenMode.truncate);
 
-      int sent = 0;
+      // Write in 64KB chunks — writeBytes offset must increment correctly
+      const chunkSize = 65536;
       final bytes = await localFile.readAsBytes();
-      const chunkSize = 32768; // 32KB chunks
-      for (int offset = 0; offset < bytes.length; offset += chunkSize) {
+      int offset = 0;
+
+      while (offset < bytes.length) {
         final end = (offset + chunkSize).clamp(0, bytes.length);
-        final chunk = bytes.sublist(offset, end);
+        final chunk = Uint8List.sublistView(bytes, offset, end);
         await remoteFile.writeBytes(chunk, offset: offset);
-        sent += chunk.length;
+        offset = end;
         setState(() => transfer.progress = fileSize > 0
-          ? (sent / fileSize).clamp(0.0, 1.0) : 0.5);
+          ? (offset / fileSize).clamp(0.0, 1.0) : 0.5);
       }
       await remoteFile.close();
 
@@ -430,7 +445,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
         backgroundColor: _bar,
         elevation: 0,
         title: _selectMode
-          ? Text('\${_selected.length} selected', style: TextStyle(fontSize: 16, color: _accent))
+          ? Text('${_selected.length} selected', style: TextStyle(fontSize: 16, color: _accent))
           : const Text('File Manager', style: TextStyle(fontSize: 16)),
         leading: _selectMode
           ? IconButton(
@@ -439,6 +454,18 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
             )
           : null,
         actions: _selectMode ? [
+          IconButton(
+            icon: const Icon(Icons.download_rounded),
+            color: _accent,
+            tooltip: 'Download selected',
+            onPressed: _downloadSelected,
+          ),
+          IconButton(
+            icon: const Icon(Icons.lock_outline_rounded),
+            color: _accent,
+            tooltip: 'chmod selected',
+            onPressed: _chmodSelected,
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline_rounded),
             color: AppTheme.danger,
@@ -612,6 +639,66 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     try {
       await _run('chmod $result "${entry.path}"');
       _ls(_cwd);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('chmod failed: $e')));
+    }
+  }
+
+  // ── Download multiple selected ────────────────────────────────────────────
+  Future<void> _downloadSelected() async {
+    final files = _entries.where((e) => _selected.contains(e.path) && !e.isDir).toList();
+    if (files.isEmpty) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No files selected (folders cannot be downloaded)')));
+      return;
+    }
+    setState(() => _selected.clear());
+    for (final f in files) {
+      await _download(f);
+    }
+  }
+
+  // ── Chmod multiple selected ────────────────────────────────────────────────
+  Future<void> _chmodSelected() async {
+    if (_selected.isEmpty) return;
+    final ctrl = TextEditingController(text: '755');
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Change Permissions (${_selected.length} items)'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Apply to all ${_selected.length} selected items',
+            style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            decoration: const InputDecoration(
+              labelText: 'Octal permission (e.g. 755)',
+              hintText: '755',
+            ),
+            keyboardType: TextInputType.number,
+            maxLength: 4,
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Apply')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null || result.isEmpty) return;
+    try {
+      for (final path in _selected) {
+        await _run('chmod $result "$path"');
+      }
+      setState(() => _selected.clear());
+      _ls(_cwd);
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('chmod $result applied')));
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('chmod failed: $e')));
@@ -849,9 +936,11 @@ class _TransferCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final isErr = transfer.error != null;
     final color = isErr ? AppTheme.danger
-      : transfer.done ? AppTheme.success : AppTheme.primary;
+      : transfer.done ? AppTheme.success : accent;
+    final indeterminate = transfer.progress < 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 6),
@@ -865,36 +954,31 @@ class _TransferCard extends StatelessWidget {
         Row(children: [
           Icon(
             transfer.isUpload ? Icons.upload_rounded : Icons.download_rounded,
-            color: color, size: 16,
-          ),
+            size: 14, color: color),
           const SizedBox(width: 8),
           Expanded(child: Text(transfer.name,
-            style: const TextStyle(color: Colors.white70, fontSize: 13),
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
             overflow: TextOverflow.ellipsis)),
           if (transfer.done)
-            Icon(isErr ? Icons.error_rounded : Icons.check_circle_rounded,
-              color: color, size: 16),
-          if (!transfer.done)
-            Text('${(transfer.progress * 100).toInt()}%',
-              style: TextStyle(color: color, fontSize: 12)),
+            Icon(isErr ? Icons.error_outline_rounded : Icons.check_circle_rounded,
+              size: 16, color: color)
+          else
+            Text(
+              indeterminate ? '...' : '${(transfer.progress * 100).toInt()}%',
+              style: TextStyle(fontSize: 11, color: color)),
         ]),
-        if (!transfer.done) ...[
-          const SizedBox(height: 6),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: transfer.progress,
-              backgroundColor: Colors.white12,
-              valueColor: AlwaysStoppedAnimation(color),
-              minHeight: 4,
-            ),
-          ),
-        ],
-        if (isErr) ...[
-          const SizedBox(height: 4),
-          Text(transfer.error!, style: const TextStyle(
-            color: AppTheme.danger, fontSize: 11)),
-        ],
+        const SizedBox(height: 6),
+        if (!transfer.done)
+          indeterminate
+            ? LinearProgressIndicator(color: color, backgroundColor: color.withOpacity(0.15))
+            : LinearProgressIndicator(
+                value: transfer.progress,
+                color: color,
+                backgroundColor: color.withOpacity(0.15),
+              )
+        else if (isErr)
+          Text(transfer.error!, style: TextStyle(fontSize: 11, color: AppTheme.danger),
+            overflow: TextOverflow.ellipsis),
       ]),
     );
   }
