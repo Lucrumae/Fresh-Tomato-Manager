@@ -218,24 +218,32 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      // Upload via base64 piped through SSH — reliable on all routers
       final bytes = await localFile.readAsBytes();
-      setState(() => transfer.progress = 0.3); // encoding
+      final escapedPath = remotePath.replaceAll("'", "'\''");
 
-      // Encode to base64 in chunks to avoid huge single string
-      final b64 = base64Encode(bytes);
-      setState(() => transfer.progress = 0.6); // uploading
-
-      // Write via base64 decode on router side
-      final escapedPath = remotePath.replaceAll('"', '\"');
+      // Stream raw bytes directly into SSH stdin — works on all BusyBox routers
+      // Uses 'dd' to write stdin to file, no base64 needed, no ARG_MAX limit
       final session = await ssh.client!.execute(
-        'echo "$b64" | base64 -d > "$escapedPath"'
+        "dd of='$escapedPath' bs=4096"
       );
+
+      // Write bytes to stdin in 4KB chunks, updating progress
+      const chunkSize = 4096;
+      int sent = 0;
+      while (sent < bytes.length) {
+        final end = (sent + chunkSize).clamp(0, bytes.length);
+        session.stdin.add(bytes.sublist(sent, end));
+        sent = end;
+        setState(() => transfer.progress =
+          (sent / bytes.length).clamp(0.0, 0.99));
+        // Small yield to let UI update
+        await Future.delayed(Duration.zero);
+      }
+      await session.stdin.close();
       await session.done;
-      setState(() => transfer.progress = 1.0);
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
-      _ls(_cwd); // refresh
+      _ls(_cwd);
 
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('✓ ${picked.name} berhasil diupload')));
