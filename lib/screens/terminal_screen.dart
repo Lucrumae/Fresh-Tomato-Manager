@@ -7,438 +7,355 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
 
-class TerminalScreen extends ConsumerStatefulWidget {
-  const TerminalScreen({super.key});
-  @override
-  ConsumerState<TerminalScreen> createState() => _TerminalScreenState();
+// ─── ANSI Color Parser ────────────────────────────────────────────────────────
+class _Span {
+  final String text;
+  final Color? fg;
+  final Color? bg;
+  final bool bold;
+  const _Span(this.text, {this.fg, this.bg, this.bold = false});
 }
 
-class _TerminalScreenState extends ConsumerState<TerminalScreen>
-    with WidgetsBindingObserver {
-  final _scrollCtrl  = ScrollController();
-  final _focusNode   = FocusNode();
-  final _inputCtrl   = TextEditingController();
-  final _lines       = <_TermLine>[];
-  SSHSession? _session;
-  bool _connecting   = false;
-  bool _connected    = false;
-  StreamSubscription? _stdoutSub;
-  StreamSubscription? _stderrSub;
-  String _buffer     = '';
-  final _cmdHistory  = <String>[];
-  int _historyIdx    = -1;
-  bool _keyboardVisible = false;
+List<_Span> _parseAnsi(String raw) {
+  const base = [
+    Color(0xFF1E1E2E), Color(0xFFCC3333), Color(0xFF44A744), Color(0xFFCDAA1A),
+    Color(0xFF4F9EE8), Color(0xFFAA44AA), Color(0xFF44AAAA), Color(0xFFBBBBBB),
+    Color(0xFF666666), Color(0xFFFF5555), Color(0xFF55FF55), Color(0xFFFFFF55),
+    Color(0xFF6699FF), Color(0xFFFF55FF), Color(0xFF55FFFF), Color(0xFFFFFFFF),
+  ];
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _startShell();
+  Color? fg, bg; bool bold = false;
+  final out = <_Span>[];
+
+  Color x256(int i) {
+    if (i < 16) return base[i];
+    if (i < 232) {
+      final n = i - 16;
+      return Color.fromARGB(255, (n ~/ 36) * 51, ((n ~/ 6) % 6) * 51, (n % 6) * 51);
+    }
+    final v = 8 + (i - 232) * 10;
+    return Color.fromARGB(255, v, v, v);
   }
 
-  @override
-  void dispose() {
+  void add(String t) {
+    if (t.isEmpty) return;
+    if (out.isNotEmpty && out.last.fg == fg && out.last.bg == bg && out.last.bold == bold) {
+      out[out.length-1] = _Span(out.last.text + t, fg: fg, bg: bg, bold: bold);
+    } else {
+      out.add(_Span(t, fg: fg, bg: bg, bold: bold));
+    }
+  }
+
+  final re = RegExp(r'\x1B\[([0-9;]*)m|([\s\S])');
+  for (final m in re.allMatches(raw)) {
+    if (m.group(1) != null) {
+      final cs = m.group(1)!.split(';').map((s) => int.tryParse(s) ?? 0).toList();
+      for (int i = 0; i < cs.length; i++) {
+        final c = cs[i];
+        if (c == 0) { fg = null; bg = null; bold = false; }
+        else if (c == 1) bold = true;
+        else if (c == 22) bold = false;
+        else if (c >= 30 && c <= 37) fg = base[c-30+(bold?8:0)];
+        else if (c == 39) fg = null;
+        else if (c >= 40 && c <= 47) bg = base[c-40];
+        else if (c == 49) bg = null;
+        else if (c >= 90 && c <= 97) fg = base[c-82];
+        else if (c >= 100 && c <= 107) bg = base[c-92];
+        else if ((c==38||c==48) && i+2<cs.length && cs[i+1]==5) {
+          final col = x256(cs[i+2].clamp(0,255));
+          if (c==38) fg=col; else bg=col; i+=2;
+        }
+      }
+    } else if (m.group(2) != null) add(m.group(2)!);
+  }
+  return out;
+}
+
+class _Line { final String plain; final List<_Span> spans; final bool partial;
+  _Line(this.plain, this.spans, {this.partial=false}); }
+
+// ─── Terminal Screen ──────────────────────────────────────────────────────────
+class TerminalScreen extends ConsumerStatefulWidget {
+  const TerminalScreen({super.key});
+  @override ConsumerState<TerminalScreen> createState() => _TS();
+}
+
+class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
+  final _scroll  = ScrollController();
+  final _focus   = FocusNode();
+  final _input   = TextEditingController();
+  final _lines   = <_Line>[];
+  SSHSession? _sess;
+  bool _conn = false, _loading = false;
+  StreamSubscription? _sub1, _sub2;
+  String _buf = '';
+  final _hist = <String>[];
+  int _hi = -1;
+  bool _kb = false;
+
+  static const _bg  = Color(0xFF0B0F1A);
+  static const _bar = Color(0xFF111827);
+  static const _brd = Color(0xFF1F2D3D);
+
+  @override void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _focus.addListener(() { if(mounted) setState((){ }); });
+    _start();
+  }
+
+  @override void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stdoutSub?.cancel();
-    _stderrSub?.cancel();
-    _session?.close();
-    _scrollCtrl.dispose();
-    _focusNode.dispose();
-    _inputCtrl.dispose();
+    _sub1?.cancel(); _sub2?.cancel(); _sess?.close();
+    _scroll.dispose(); _focus.dispose(); _input.dispose();
     super.dispose();
   }
 
-  @override
-  void didChangeMetrics() {
-    final bottom = WidgetsBinding.instance.window.viewInsets.bottom;
-    final visible = bottom > 100;
-    if (visible != _keyboardVisible) {
-      setState(() => _keyboardVisible = visible);
-      if (visible) _scrollToBottom();
-    }
+  @override void didChangeMetrics() {
+    final v = WidgetsBinding.instance.window.viewInsets.bottom > 150;
+    if (v != _kb && mounted) { setState(() => _kb = v); if(v) _bot(); }
   }
 
-  Future<void> _startShell() async {
-    setState(() { _connecting = true; });
-    _addLine('Connecting...', type: _LineType.system);
+  Future<void> _start() async {
+    setState(() { _loading=true; _buf=''; _lines.clear(); });
+    _addSys('Connecting...');
     try {
       final ssh = ref.read(sshServiceProvider);
-      if (!ssh.isConnected || ssh.client == null) {
-        _addLine('Not connected. Go back and reconnect.', type: _LineType.error);
-        setState(() => _connecting = false);
-        return;
+      if (!ssh.isConnected || ssh.client==null) {
+        _addSys('Not connected.'); setState(() => _loading=false); return;
       }
-      _session = await ssh.client!.shell(
-        pty: SSHPtyConfig(width: 120, height: 40, type: 'xterm-256color'),
-      );
-      setState(() { _connecting = false; _connected = true; });
-
-      _stdoutSub = _session!.stdout.listen(
-        (data) => _onData(data),
-        onDone: () {
-          if (mounted) {
-            _addLine('\n[Session closed]', type: _LineType.system);
-            setState(() => _connected = false);
-          }
-        },
-      );
-      _stderrSub = _session!.stderr.listen((data) => _onData(data, isError: true));
-    } catch (e) {
-      _addLine('Error: $e', type: _LineType.error);
-      setState(() => _connecting = false);
-    }
+      _sess = await ssh.client!.shell(
+        pty: SSHPtyConfig(width:200, height:50, type:'xterm-256color'));
+      setState(() { _loading=false; _conn=true; });
+      _sub1 = _sess!.stdout.listen(_onData,
+        onDone: (){ if(mounted){ _addSys('[Session closed]'); setState(()=>_conn=false); }});
+      _sub2 = _sess!.stderr.listen((d)=>_onData(d, err:true));
+    } catch(e) { _addSys('Error: $e'); setState(() => _loading=false); }
   }
 
-  void _onData(Uint8List data, {bool isError = false}) {
-    var text = String.fromCharCodes(data);
-    text = text
-      .replaceAll(RegExp(r'\x1B\[[0-9;]*[mGKHFJABCDsuhlnr]'), '')
-      .replaceAll(RegExp(r'\x1B\([AB]'), '')
-      .replaceAll(RegExp(r'\x1B\][\s\S]*?\x07'), '')
-      .replaceAll('\r\n', '\n')
-      .replaceAll('\r', '\n');
-
-    _buffer += text;
-    final parts = _buffer.split('\n');
-    _buffer = parts.removeLast();
-
-    for (final part in parts) {
-      _addLine(part, type: isError ? _LineType.error : _LineType.output);
-    }
-    if (_buffer.isNotEmpty) {
-      _addLine(_buffer, type: _LineType.output, partial: true);
-      _buffer = '';
-    }
+  void _onData(Uint8List data, {bool err=false}) {
+    var t = String.fromCharCodes(data)
+      .replaceAll('\r\n', '\n').replaceAll('\r', '\n')
+      .replaceAll(RegExp(r'\x1B\[[0-9;]*[ABCDHF]'),'')
+      .replaceAll(RegExp(r'\x1B\[[0-9;]*[JK]'),'')
+      .replaceAll(RegExp(r'\x1B\[[0-9;]*[hl]'),'')
+      .replaceAll(RegExp(r'\x1B\][^\x07]*\x07'),'')
+      .replaceAll(RegExp(r'\x1B\([AB]'),'');
+    _buf += t;
+    final ps = _buf.split('\n'); _buf = ps.removeLast();
+    for (final p in ps) _addAnsi(p, err:err);
+    if (_buf.isNotEmpty) { _addAnsi(_buf, partial:true, err:err); _buf=''; }
   }
 
-  void _addLine(String text, {required _LineType type, bool partial = false}) {
+  void _addSys(String t) {
     if (!mounted) return;
     setState(() {
+      _lines.add(_Line(t, [_Span(t, fg: AppTheme.terminal.withOpacity(0.5))]));
+      if (_lines.length>2000) _lines.removeRange(0, _lines.length-2000);
+    }); _bot();
+  }
+
+  void _addAnsi(String raw, {bool partial=false, bool err=false}) {
+    if (!mounted) return;
+    final plain = raw.replaceAll(RegExp(r'\x1B\[[0-9;]*m'),'');
+    final spans = err
+      ? [_Span(plain, fg:const Color(0xFFF38BA8))]
+      : (_parseAnsi(raw).isEmpty ? [_Span(plain, fg:const Color(0xFFCDD6F4))] : _parseAnsi(raw));
+    setState(() {
       if (_lines.isNotEmpty && _lines.last.partial) {
-        _lines[_lines.length - 1] = _TermLine(
-          text: _lines.last.text + text, type: type, partial: partial);
+        final prev = _lines.last;
+        _lines[_lines.length-1] = _Line(prev.plain+plain,
+          [...prev.spans,...spans], partial:partial);
       } else {
-        for (final part in text.split('\n')) {
-          _lines.add(_TermLine(text: part, type: type, partial: false));
-        }
+        _lines.add(_Line(plain, spans, partial:partial));
       }
-      if (_lines.length > 1000) _lines.removeRange(0, _lines.length - 1000);
-    });
-    _scrollToBottom();
+      if (_lines.length>2000) _lines.removeRange(0, _lines.length-2000);
+    }); _bot();
   }
 
   void _send(String cmd) {
-    if (!_connected || _session == null) return;
-    if (cmd.isNotEmpty) {
-      if (_cmdHistory.isEmpty || _cmdHistory.last != cmd) {
-        _cmdHistory.add(cmd);
-        if (_cmdHistory.length > 100) _cmdHistory.removeAt(0);
-      }
+    if (!_conn || _sess==null) return;
+    if (cmd.isNotEmpty && (_hist.isEmpty || _hist.last!=cmd)) {
+      _hist.add(cmd); if(_hist.length>100) _hist.removeAt(0);
     }
-    _historyIdx = -1;
-    _session!.stdin.add(Uint8List.fromList('$cmd\n'.codeUnits));
-    _inputCtrl.clear();
-    _scrollToBottom();
+    _hi=-1; _sess!.stdin.add(Uint8List.fromList('$cmd\n'.codeUnits));
+    _input.clear(); _bot();
   }
 
-  void _sendRaw(List<int> bytes) {
-    if (!_connected || _session == null) return;
-    _session!.stdin.add(Uint8List.fromList(bytes));
-  }
+  void _raw(List<int> b) { if(_conn) _sess?.stdin.add(Uint8List.fromList(b)); }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.animateTo(
-          _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 80),
-          curve: Curves.easeOut,
-        );
-      }
-    });
-  }
+  void _bot() => WidgetsBinding.instance.addPostFrameCallback((_) {
+    if (_scroll.hasClients)
+      _scroll.animateTo(_scroll.position.maxScrollExtent,
+        duration:const Duration(milliseconds:80), curve:Curves.easeOut);
+  });
 
-  void _historyUp() {
-    if (_cmdHistory.isEmpty) return;
-    setState(() {
-      _historyIdx = (_historyIdx + 1).clamp(0, _cmdHistory.length - 1);
-      _inputCtrl.text = _cmdHistory[_cmdHistory.length - 1 - _historyIdx];
-      _inputCtrl.selection = TextSelection.collapsed(offset: _inputCtrl.text.length);
-    });
-  }
+  void _hUp() { if(_hist.isEmpty) return;
+    setState((){ _hi=(_hi+1).clamp(0,_hist.length-1);
+      _input.text=_hist[_hist.length-1-_hi];
+      _input.selection=TextSelection.collapsed(offset:_input.text.length); }); }
 
-  void _historyDown() {
-    if (_historyIdx <= 0) {
-      setState(() { _historyIdx = -1; _inputCtrl.clear(); });
-      return;
-    }
-    setState(() {
-      _historyIdx--;
-      _inputCtrl.text = _cmdHistory[_cmdHistory.length - 1 - _historyIdx];
-      _inputCtrl.selection = TextSelection.collapsed(offset: _inputCtrl.text.length);
-    });
-  }
+  void _hDn() { if(_hi<=0){ setState((){ _hi=-1; _input.clear(); }); return; }
+    setState((){ _hi--;
+      _input.text=_hist[_hist.length-1-_hi];
+      _input.selection=TextSelection.collapsed(offset:_input.text.length); }); }
 
-  static const _quickCmds = [
-    ('top -bn1 | head -25', 'top'),
-    ('free -m', 'free'),
-    ('df -h', 'df'),
-    ('ip addr', 'ip'),
-    ('arp -a', 'arp'),
-    ('logread | tail -40', 'logs'),
-    ('uptime', 'uptime'),
-    ('ps', 'ps'),
-    ('ls -la', 'ls'),
-    ('cat /proc/net/dev', 'netdev'),
+  static const _quick = [
+    ('top -bn1|head -25','top'),('free -m','free'),('df -h','df'),
+    ('ip addr','ip'),('arp -a','arp'),('logread|tail -40','logs'),
+    ('uptime','uptime'),('ps','ps'),('ls -la','ls'),
   ];
 
-  // Ctrl key combinations
-  static const _ctrlKeys = [
-    ('C', [3]),    // Ctrl+C
-    ('D', [4]),    // Ctrl+D
-    ('Z', [26]),   // Ctrl+Z
-    ('L', [12]),   // Ctrl+L (clear)
-    ('A', [1]),    // Ctrl+A (begin of line)
-    ('E', [5]),    // Ctrl+E (end of line)
-    ('U', [21]),   // Ctrl+U (clear line)
-    ('W', [23]),   // Ctrl+W (delete word)
-    ('R', [18]),   // Ctrl+R (history search)
+  // Toolbar buttons: label, bytes (null=special), special id (-1=raw,0=hUp,1=hDn)
+  static const _ctrl = [
+    ('↑',null,0),('↓',null,1),('Tab',[9],-1),('Esc',[27],-1),
+    ('^C',[3],-1),('^D',[4],-1),('^Z',[26],-1),('^L',[12],-1),
+    ('^A',[1],-1),('^E',[5],-1),('^U',[21],-1),('^W',[23],-1),('^R',[18],-1),
   ];
 
   @override
-  Widget build(BuildContext context) {
-    const termBg  = Color(0xFF0D1117);
-    const termBar = Color(0xFF161B22);
-    const termBrd = Color(0xFF30363D);
-
-    return GestureDetector(
-      onTap: () {
-        _focusNode.requestFocus();
-      },
-      child: Column(
-        children: [
-          // ── Output area (clean, no header) ──────────────────────────────
-          Expanded(
-            child: Container(
-              color: termBg,
-              child: _connecting
-                ? Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
-                    const SizedBox(width: 20, height: 20,
-                      child: CircularProgressIndicator(
-                        color: AppTheme.terminal, strokeWidth: 1.5)),
-                    const SizedBox(height: 10),
-                    Text('Starting shell...',
-                      style: GoogleFonts.jetBrainsMono(
-                        color: AppTheme.terminal, fontSize: 11)),
-                  ]))
-                : ListView.builder(
-                    controller: _scrollCtrl,
-                    padding: const EdgeInsets.fromLTRB(10, 6, 10, 4),
-                    itemCount: _lines.length,
-                    itemBuilder: (ctx, i) => _buildLine(_lines[i]),
-                  ),
-            ),
-          ),
-
-          // ── Toolbar: shows above keyboard when open ────────────────────
-          Container(
-            color: termBar,
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-
-                // Ctrl keys row (shown when keyboard is visible)
-                if (_keyboardVisible) ...[
-                  Container(
-                    height: 34,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0D1117),
-                      border: Border(top: BorderSide(color: termBrd)),
-                    ),
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-                      children: [
-                        // History buttons
-                        _ctrlBtn('↑', () => _historyUp(),
-                          color: Colors.white70),
-                        _ctrlBtn('↓', () => _historyDown(),
-                          color: Colors.white70),
-                        Container(width: 1, color: termBrd, margin:
-                          const EdgeInsets.symmetric(horizontal: 4, vertical: 6)),
-                        // Ctrl keys
-                        ..._ctrlKeys.map((k) => _ctrlBtn(
-                          'Ctrl+${k.$1}',
-                          () => _sendRaw(k.$2),
-                          color: AppTheme.terminal,
-                        )),
-                        Container(width: 1, color: termBrd, margin:
-                          const EdgeInsets.symmetric(horizontal: 4, vertical: 6)),
-                        // Special keys
-                        _ctrlBtn('Tab',   () => _sendRaw([9]),  color: Colors.white54),
-                        _ctrlBtn('Esc',   () => _sendRaw([27]), color: Colors.white54),
-                        _ctrlBtn('Clear', () => setState(() => _lines.clear()),
-                          color: AppTheme.warning),
-                        _ctrlBtn('↺', () {
-                          _session?.close();
-                          _stdoutSub?.cancel();
-                          setState(() { _connected = false; _lines.clear(); });
-                          _startShell();
-                        }, color: AppTheme.danger),
-                      ],
-                    ),
-                  ),
-
-                  // Input bar (only shown when keyboard is open)
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
-                    color: termBar,
-                    child: Row(children: [
-                      Text('# ', style: GoogleFonts.jetBrainsMono(
-                        color: AppTheme.terminal, fontSize: 13,
-                        fontWeight: FontWeight.bold)),
-                      Expanded(
-                        child: TextField(
-                          controller: _inputCtrl,
-                          focusNode: _focusNode,
-                          enabled: _connected,
-                          autofocus: false,
-                          style: GoogleFonts.jetBrainsMono(
-                            color: Colors.white, fontSize: 13),
-                          decoration: const InputDecoration(
-                            isDense: true, border: InputBorder.none,
-                            enabledBorder: InputBorder.none,
-                            focusedBorder: InputBorder.none,
-                            filled: false,
-                            contentPadding: EdgeInsets.symmetric(vertical: 6),
-                            hintText: 'command...',
-                            hintStyle: TextStyle(
-                              color: Color(0xFF555A72), fontSize: 13),
-                          ),
-                          onSubmitted: _send,
-                          textInputAction: TextInputAction.send,
-                        ),
-                      ),
-                      GestureDetector(
-                        onTap: () => _send(_inputCtrl.text),
-                        child: const Padding(
-                          padding: EdgeInsets.all(4),
-                          child: Icon(Icons.send_rounded,
-                            color: AppTheme.terminal, size: 17),
-                        ),
-                      ),
-                    ]),
-                  ),
-                ],
-
-                // Quick commands row + action buttons (always visible)
-                Container(
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: termBar,
-                    border: Border(top: BorderSide(color: termBrd)),
-                  ),
-                  child: Row(children: [
-                    // Status dot + toggle keyboard
-                    GestureDetector(
-                      onTap: () {
-                        if (_focusNode.hasFocus) {
-                          _focusNode.unfocus();
-                        } else {
-                          _focusNode.requestFocus();
-                        }
-                      },
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        child: Row(mainAxisSize: MainAxisSize.min, children: [
-                          Container(
-                            width: 7, height: 7,
-                            decoration: BoxDecoration(
-                              color: _connected ? AppTheme.terminal : Colors.red,
-                              shape: BoxShape.circle,
-                            ),
-                          ),
-                          const SizedBox(width: 5),
-                          Icon(
-                            _keyboardVisible
-                              ? Icons.keyboard_hide_rounded
-                              : Icons.keyboard_rounded,
-                            color: AppTheme.terminal.withOpacity(0.7),
-                            size: 16,
-                          ),
-                        ]),
-                      ),
-                    ),
-                    // Scrollable quick cmds
-                    Expanded(
-                      child: ListView(
-                        scrollDirection: Axis.horizontal,
-                        padding: const EdgeInsets.symmetric(vertical: 5),
-                        children: _quickCmds.map((cmd) => Padding(
-                          padding: const EdgeInsets.only(right: 5),
-                          child: GestureDetector(
-                            onTap: () => _send(cmd.$1),
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 9, vertical: 2),
-                              decoration: BoxDecoration(
-                                border: Border.all(
-                                  color: AppTheme.terminal.withOpacity(0.3)),
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(cmd.$2,
-                                style: GoogleFonts.jetBrainsMono(
-                                  color: AppTheme.terminal, fontSize: 11)),
-                            ),
-                          ),
-                        )).toList(),
-                      ),
-                    ),
-                  ]),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _ctrlBtn(String label, VoidCallback onTap, {Color? color}) =>
-    GestureDetector(
-      onTap: onTap,
-      child: Container(
-        margin: const EdgeInsets.only(right: 5),
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-        decoration: BoxDecoration(
-          color: (color ?? AppTheme.terminal).withOpacity(0.1),
-          border: Border.all(
-            color: (color ?? AppTheme.terminal).withOpacity(0.3)),
-          borderRadius: BorderRadius.circular(4),
+  Widget build(BuildContext ctx) {
+    final focused = _focus.hasFocus;
+    return Column(children:[
+      // ── Output area ──────────────────────────────────────────────────────
+      Expanded(child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => focused ? _focus.unfocus() : _focus.requestFocus(),
+        child: Container(color:_bg, width:double.infinity,
+          child: _loading
+            ? Center(child:Column(mainAxisSize:MainAxisSize.min,children:[
+                const SizedBox(width:18,height:18,child:CircularProgressIndicator(
+                  color:AppTheme.terminal,strokeWidth:1.5)),
+                const SizedBox(height:10),
+                Text('Starting shell...',style:GoogleFonts.jetBrainsMono(
+                  color:AppTheme.terminal,fontSize:12)),
+              ]))
+            : ListView.builder(
+                controller:_scroll,
+                padding:const EdgeInsets.fromLTRB(10,8,10,4),
+                itemCount:_lines.length,
+                itemBuilder:(c,i)=>_buildLine(_lines[i]),
+              ),
         ),
-        child: Text(label, style: GoogleFonts.jetBrainsMono(
-          color: color ?? AppTheme.terminal, fontSize: 11,
-          fontWeight: FontWeight.w500)),
+      )),
+
+      // ── Ctrl toolbar + input (above keyboard) ─────────────────────────────
+      if (_kb) ...[
+        Container(height:38, color:_bar,
+          child: ListView(scrollDirection:Axis.horizontal,
+            padding:const EdgeInsets.symmetric(horizontal:6,vertical:5),
+            children:[
+              ..._ctrl.map((k)=>_tb(k.$1, (){
+                if(k.$3==0) _hUp();
+                else if(k.$3==1) _hDn();
+                else if(k.$2!=null) _raw(k.$2!);
+              }, col: k.$1.startsWith('^') ? AppTheme.terminal : Colors.white70)),
+              _sep(),
+              _tb('Clear', ()=>setState(()=>_lines.clear()), col:AppTheme.warning),
+              _tb('↺', (){
+                _sub1?.cancel(); _sub2?.cancel(); _sess?.close();
+                setState((){ _conn=false; _lines.clear(); }); _start();
+              }, col:AppTheme.danger),
+            ],
+          ),
+        ),
+        // Input row
+        Container(color:_bar,
+          padding:const EdgeInsets.fromLTRB(10,0,10,4),
+          child:Row(children:[
+            Text('# ',style:GoogleFonts.jetBrainsMono(
+              color:AppTheme.terminal,fontSize:13,fontWeight:FontWeight.bold)),
+            Expanded(child:TextField(
+              controller:_input, focusNode:_focus, enabled:_conn,
+              style:GoogleFonts.jetBrainsMono(color:Colors.white,fontSize:13),
+              cursorColor:AppTheme.terminal,
+              decoration:const InputDecoration(
+                isDense:true, border:InputBorder.none,
+                enabledBorder:InputBorder.none, focusedBorder:InputBorder.none,
+                filled:false, contentPadding:EdgeInsets.symmetric(vertical:8),
+                hintText:'command...',
+                hintStyle:TextStyle(color:Color(0xFF3A4A60),fontSize:13),
+              ),
+              onSubmitted:_send, textInputAction:TextInputAction.send,
+            )),
+            GestureDetector(onTap:()=>_send(_input.text),
+              child:const Padding(padding:EdgeInsets.all(6),
+                child:Icon(Icons.send_rounded,color:AppTheme.terminal,size:17))),
+          ]),
+        ),
+      ],
+
+      // ── Bottom bar: status + quick cmds ─────────────────────────────────
+      Container(height:36, decoration:BoxDecoration(color:_bar,
+        border:Border(top:BorderSide(color:_brd))),
+        child:Row(children:[
+          GestureDetector(
+            onTap:()=> focused ? _focus.unfocus() : _focus.requestFocus(),
+            child:Container(padding:const EdgeInsets.symmetric(horizontal:10),
+              child:Row(mainAxisSize:MainAxisSize.min,children:[
+                Container(width:7,height:7,decoration:BoxDecoration(
+                  color:_conn?AppTheme.terminal:Colors.redAccent,
+                  shape:BoxShape.circle)),
+                const SizedBox(width:6),
+                Icon(_kb?Icons.keyboard_hide_rounded:Icons.keyboard_rounded,
+                  color:AppTheme.terminal.withOpacity(0.6),size:15),
+              ]),
+            ),
+          ),
+          Expanded(child:ListView(scrollDirection:Axis.horizontal,
+            padding:const EdgeInsets.symmetric(vertical:5),
+            children:_quick.map((q)=>Padding(
+              padding:const EdgeInsets.only(right:5),
+              child:GestureDetector(onTap:(){
+                _send(q.$1);
+                if(!focused) _focus.requestFocus();
+              },
+              child:Container(
+                padding:const EdgeInsets.symmetric(horizontal:9,vertical:2),
+                decoration:BoxDecoration(
+                  border:Border.all(color:AppTheme.terminal.withOpacity(0.25)),
+                  borderRadius:BorderRadius.circular(4)),
+                child:Text(q.$2,style:GoogleFonts.jetBrainsMono(
+                  color:AppTheme.terminal,fontSize:11)),
+              )),
+            )).toList(),
+          )),
+        ]),
       ),
-    );
 
-  Widget _buildLine(_TermLine line) {
-    Color color;
-    switch (line.type) {
-      case _LineType.output: color = const Color(0xFFCDD6F4); break;
-      case _LineType.error:  color = const Color(0xFFF38BA8); break;
-      case _LineType.system: color = AppTheme.terminal.withOpacity(0.5); break;
-    }
-    return Text(line.text,
-      style: GoogleFonts.jetBrainsMono(
-        fontSize: 11.5, color: color, height: 1.45));
+      // Hidden input trigger
+      SizedBox(height:0, child:TextField(focusNode:_focus, controller:_input,
+        style:const TextStyle(height:0, color:Colors.transparent),
+        decoration:const InputDecoration(border:InputBorder.none, isDense:true,
+          contentPadding:EdgeInsets.zero),
+        onSubmitted:_send, textInputAction:TextInputAction.send,
+      )),
+    ]);
   }
-}
 
-enum _LineType { output, error, system }
-class _TermLine {
-  final String text;
-  final _LineType type;
-  final bool partial;
-  const _TermLine({required this.text, required this.type, this.partial = false});
+  Widget _buildLine(_Line l) {
+    if (l.spans.isEmpty) return const SizedBox(height:15);
+    return RichText(text:TextSpan(children:l.spans.map((s)=>TextSpan(
+      text:s.text,
+      style:GoogleFonts.jetBrainsMono(
+        fontSize:12, height:1.4,
+        color:s.fg??const Color(0xFFCDD6F4),
+        backgroundColor:s.bg,
+        fontWeight:s.bold?FontWeight.bold:FontWeight.normal),
+    )).toList()));
+  }
+
+  Widget _tb(String label, VoidCallback fn, {Color? col}) =>
+    GestureDetector(onTap:fn,
+      child:Container(margin:const EdgeInsets.only(right:4),
+        padding:const EdgeInsets.symmetric(horizontal:8,vertical:3),
+        decoration:BoxDecoration(
+          color:(col??AppTheme.terminal).withOpacity(0.08),
+          border:Border.all(color:(col??AppTheme.terminal).withOpacity(0.25)),
+          borderRadius:BorderRadius.circular(5)),
+        child:Text(label,style:GoogleFonts.jetBrainsMono(
+          color:col??AppTheme.terminal,fontSize:11,fontWeight:FontWeight.w500))));
+
+  Widget _sep() => Container(width:1,color:_brd,
+    margin:const EdgeInsets.symmetric(horizontal:4,vertical:6));
 }

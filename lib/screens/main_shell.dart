@@ -11,6 +11,7 @@ import 'bandwidth_screen.dart';
 import 'logs_screen.dart';
 import 'settings_screen.dart';
 import 'terminal_screen.dart';
+import 'files_screen.dart';
 
 class MainShell extends ConsumerStatefulWidget {
   const MainShell({super.key});
@@ -31,7 +32,6 @@ class _MainShellState extends ConsumerState<MainShell>
       ref.read(routerStatusProvider.notifier).startPolling();
       ref.read(devicesProvider.notifier).startPolling();
       ref.read(bandwidthProvider.notifier).startPolling();
-      // Start connection keeper
       ref.read(connectionKeeperProvider).start();
     });
   }
@@ -45,21 +45,19 @@ class _MainShellState extends ConsumerState<MainShell>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkAndReconnect();
-    }
+    if (state == AppLifecycleState.resumed) _checkReconnect();
   }
 
-  Future<void> _checkAndReconnect() async {
-    await Future.delayed(const Duration(milliseconds: 800));
+  Future<void> _checkReconnect() async {
+    await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
     final ssh = ref.read(sshServiceProvider);
     if (!ssh.isConnected) {
       setState(() => _isReconnecting = true);
       final config = ref.read(configProvider);
       if (config != null) {
-        final error = await ssh.connect(config);
-        if (error == null && mounted) {
+        final err = await ssh.connect(config);
+        if (err == null && mounted) {
           ref.read(routerStatusProvider.notifier).startPolling();
           ref.read(devicesProvider.notifier).startPolling();
           ref.read(bandwidthProvider.notifier).startPolling();
@@ -73,16 +71,16 @@ class _MainShellState extends ConsumerState<MainShell>
   Widget build(BuildContext context) {
     final l = AppL10n.of(context);
     final c = Theme.of(context).extension<AppColors>()!;
-    // Watch SSH connection state via routerStatus
-    final status = ref.watch(routerStatusProvider);
 
+    // 7 tabs now including Files
     final tabs = [
-      (Icons.dashboard_rounded,  l.dashboard),
-      (Icons.devices_rounded,    l.devices),
-      (Icons.show_chart_rounded, l.bandwidth),
-      (Icons.article_rounded,    l.logs),
-      (Icons.terminal_rounded,   l.terminal),
-      (Icons.settings_rounded,   l.settings),
+      (Icons.dashboard_rounded,           l.dashboard,  false),
+      (Icons.devices_rounded,             l.devices,    false),
+      (Icons.show_chart_rounded,          l.bandwidth,  false),
+      (Icons.article_rounded,             l.logs,       false),
+      (Icons.folder_rounded,              'Files',      false),
+      (Icons.terminal_rounded,            l.terminal,   true),  // green
+      (Icons.settings_rounded,            l.settings,   false),
     ];
 
     final screens = [
@@ -90,36 +88,33 @@ class _MainShellState extends ConsumerState<MainShell>
       const DevicesScreen(),
       const BandwidthScreen(),
       const LogsScreen(),
+      const FilesScreen(),
       const _TerminalTab(),
       const SettingsScreen(),
     ];
 
     return Scaffold(
-      body: Column(
-        children: [
-          // Reconnecting banner
-          if (_isReconnecting)
-            Material(
-              color: AppTheme.warning.withOpacity(0.15),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                child: Row(children: [
-                  const SizedBox(width: 14, height: 14,
-                    child: CircularProgressIndicator(
-                      color: AppTheme.warning, strokeWidth: 1.5)),
-                  const SizedBox(width: 10),
-                  Text('Reconnecting...',
-                    style: TextStyle(
-                      color: AppTheme.warning,
-                      fontSize: 13, fontWeight: FontWeight.w500)),
-                ]),
-              ),
+      body: Column(children: [
+        if (_isReconnecting)
+          Material(
+            color: AppTheme.warning.withOpacity(0.12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal:16, vertical:7),
+              child: Row(children: [
+                const SizedBox(width:14, height:14,
+                  child: CircularProgressIndicator(
+                    color: AppTheme.warning, strokeWidth:1.5)),
+                const SizedBox(width:10),
+                Text('Reconnecting...',
+                  style: TextStyle(color:AppTheme.warning,
+                    fontSize:13, fontWeight:FontWeight.w500)),
+              ]),
             ),
-          Expanded(
-            child: IndexedStack(index: _index, children: screens),
           ),
-        ],
-      ),
+        Expanded(
+          child: IndexedStack(index: _index, children: screens),
+        ),
+      ]),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: c.surface,
@@ -128,13 +123,13 @@ class _MainShellState extends ConsumerState<MainShell>
         child: SafeArea(
           top: false,
           child: SizedBox(
-            height: 60,
+            height: 58,
             child: Row(
               children: List.generate(tabs.length, (i) {
                 final sel = i == _index;
-                final isTerminal = i == 4;
+                final isGreen = tabs[i].$3;
                 final color = sel
-                  ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
+                  ? (isGreen ? AppTheme.terminal : AppTheme.primary)
                   : c.textMuted;
                 return Expanded(
                   child: GestureDetector(
@@ -143,13 +138,14 @@ class _MainShellState extends ConsumerState<MainShell>
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(tabs[i].$1, size: 22, color: color),
-                        const SizedBox(height: 3),
-                        Text(tabs[i].$2, style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                          color: color,
-                        )),
+                        Icon(tabs[i].$1, size: 20, color: color),
+                        const SizedBox(height: 2),
+                        Text(tabs[i].$2,
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
+                            color: color,
+                          )),
                       ],
                     ),
                   ),
@@ -167,7 +163,7 @@ class _TerminalTab extends StatelessWidget {
   const _TerminalTab();
   @override
   Widget build(BuildContext context) => const Scaffold(
-    backgroundColor: Color(0xFF0D1117),
+    backgroundColor: Color(0xFF0B0F1A),
     body: SafeArea(child: TerminalScreen()),
   );
 }
