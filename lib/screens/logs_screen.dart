@@ -135,7 +135,7 @@ class _LogTile extends StatelessWidget {
                   const Spacer(),
                   Text(
                     DateFormat('HH:mm:ss').format(entry.time),
-                    style: const TextStyle(fontSize: 11, color: Theme.of(context).extension<AppColors>()!.textMuted),
+                    style: TextStyle(fontSize: 11, color: Theme.of(context).extension<AppColors>()!.textMuted),
                   ),
                 ]),
                 const SizedBox(height: 3),

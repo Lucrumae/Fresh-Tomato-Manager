@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/status_badge.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/status_badge.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
@@ -168,7 +169,7 @@ class _DeviceCard extends ConsumerWidget {
 
             // Actions
             PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert_rounded, color: Theme.of(context).extension<AppColors>()!.textMuted),
+              icon: Icon(Icons.more_vert_rounded, color: Theme.of(context).extension<AppColors>()!.textMuted),
               onSelected: (action) => _onAction(context, ref, action),
               itemBuilder: (_) => [
                 const PopupMenuItem(value: 'rename', child: Text('Rename')),
