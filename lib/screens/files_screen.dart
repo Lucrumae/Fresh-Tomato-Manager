@@ -462,7 +462,7 @@ class _EntryTile extends StatelessWidget {
                 ],
                 const SizedBox(width: 8),
                 Text(entry.modified,
-                  style: const TextStyle(fontSize: 11, color: Colors.white25)),
+                  style: const TextStyle(fontSize: 11, color: Colors.white24)),
               ]),
             ],
           )),
