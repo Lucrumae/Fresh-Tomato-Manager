@@ -27,7 +27,6 @@ class NotificationService {
         channelDescription: 'Alerts when a new device connects to the router',
         importance: Importance.high,
         priority: Priority.high,
-        icon: '@mipmap/ic_launcher',
       ),
       iOS: DarwinNotificationDetails(presentAlert: true, presentBadge: true),
     );

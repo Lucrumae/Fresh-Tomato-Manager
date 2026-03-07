@@ -11,7 +11,6 @@ dependencies:
     sdk: flutter
 
   # HTTP & networking
-  http: ^1.2.0
   dio: ^5.4.0
 
   # State management
@@ -20,20 +19,19 @@ dependencies:
 
   # Storage
   shared_preferences: ^2.2.3
-  flutter_secure_storage: ^9.0.0
 
   # Charts & graphs
   fl_chart: ^0.66.2
 
-  # Notifications
-  flutter_local_notifications: ^17.1.2
+  # Notifications (pin versi stabil)
+  flutter_local_notifications: ^16.3.3
 
   # UI components
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
 
-  # Network info
-  connectivity_plus: ^6.0.3
+  # Network info (pin versi yang API-nya stabil)
+  connectivity_plus: ^5.0.2
 
   # Utils
   intl: ^0.19.0
