@@ -3,13 +3,10 @@ name: Build Tomato Manager
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:   # bisa trigger manual dari GitHub UI
+  workflow_dispatch:
 
 jobs:
 
-  # ─────────────────────────────────────────────
-  # BUILD ANDROID APK
-  # ─────────────────────────────────────────────
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
@@ -31,23 +28,29 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Create Flutter project scaffold
+        run: |
+          flutter create --org com.tomatomanager --project-name tomato_manager /tmp/scaffold
+          # Copy our source files over the scaffold
+          cp -r lib/* /tmp/scaffold/lib/
+          cp pubspec.yaml /tmp/scaffold/pubspec.yaml
+          cp android/app/src/main/AndroidManifest.xml /tmp/scaffold/android/app/src/main/AndroidManifest.xml
+
       - name: Install dependencies
+        working-directory: /tmp/scaffold
         run: flutter pub get
 
-      - name: Build APK (release)
+      - name: Build APK
+        working-directory: /tmp/scaffold
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: tomato-manager-android
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: /tmp/scaffold/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
 
-
-  # ─────────────────────────────────────────────
-  # BUILD iOS IPA (butuh Mac runner)
-  # ─────────────────────────────────────────────
   build-ios:
     name: Build iOS IPA
     runs-on: macos-latest
@@ -63,28 +66,35 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Create Flutter project scaffold
+        run: |
+          flutter create --org com.tomatomanager --project-name tomato_manager /tmp/scaffold
+          cp -r lib/* /tmp/scaffold/lib/
+          cp pubspec.yaml /tmp/scaffold/pubspec.yaml
+
       - name: Install dependencies
+        working-directory: /tmp/scaffold
         run: flutter pub get
 
       - name: Install CocoaPods
-        run: |
-          cd ios
-          pod install --repo-update
+        working-directory: /tmp/scaffold/ios
+        run: pod install --repo-update
 
-      - name: Build iOS (no codesign - untuk testing)
+      - name: Build iOS
+        working-directory: /tmp/scaffold
         run: flutter build ios --release --no-codesign
 
       - name: Create IPA
         run: |
-          mkdir -p build/ios/ipa
-          cd build/ios/iphoneos
+          mkdir -p /tmp/scaffold/build/ios/ipa
+          cd /tmp/scaffold/build/ios/iphoneos
           mkdir -p Payload
           cp -r Runner.app Payload/
-          zip -r ../ipa/TomatoManager.ipa Payload/
+          zip -r /tmp/scaffold/build/ios/ipa/TomatoManager.ipa Payload/
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
           name: tomato-manager-ios
-          path: build/ios/ipa/TomatoManager.ipa
+          path: /tmp/scaffold/build/ios/ipa/TomatoManager.ipa
           retention-days: 30
