@@ -243,7 +243,7 @@ class _BandwidthBody extends StatelessWidget {
             final monthly = (data['monthly'] as List?) ?? [];
             if (daily.isEmpty && monthly.isEmpty) {
               return const _EmptyCard(
-                  message: 'No traffic history found.\nEnsure Traffic Monitoring is enabled in FreshTomato.');
+                  message: 'No traffic data found.\nEnable: Admin > Bandwidth > Traffic Monitoring in FreshTomato.');
             }
             return _UsageHistoryCard(daily: daily, monthly: monthly);
           },
@@ -852,7 +852,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     try {
       final encoded = rules.map((r) =>
         '${r['prio']}<${r['src']}<${r['dst']}<${r['proto']}<${r['srcport']}<${r['dstport']}<${r['desc']}>').join('');
-      await ssh.run('nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true');
+      await ssh.run("nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true");
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(

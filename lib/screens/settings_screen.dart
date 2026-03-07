@@ -40,7 +40,7 @@ class SettingsScreen extends ConsumerWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(config?.host ?? '-', style: Theme.of(context).textTheme.titleSmall),
-                  Text('${config?.username ?? 'root'} · SSH :${config?.sshPort ?? 22}',
+                  Text('${config?.username ?? 'root'}  | SSH :${config?.sshPort ?? 22}',
                     style: Theme.of(context).textTheme.bodySmall),
                 ],
               )),
@@ -87,7 +87,7 @@ class SettingsScreen extends ConsumerWidget {
 
           const SizedBox(height: 12),
 
-          // ── Accent color picker ──────────────────────────────────────
+          //  Accent color picker 
           AppCard(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -106,7 +106,7 @@ class SettingsScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Accent Color', style: Theme.of(context).textTheme.titleSmall),
-                      Text('Aktif: ${accent.label}',
+                      Text('Active: ${accent.label}',
                         style: Theme.of(context).textTheme.bodySmall),
                     ],
                   )),

@@ -12,7 +12,7 @@ class SshService {
   bool get isConnected => _client != null && !(_client!.isClosed);
   SSHClient? get client => _client;
 
-  // ── Connect ────────────────────────────────────────────────────────────────
+  //  Connect 
   Future<String?> connect(TomatoConfig config) async {
     if (_connecting) return 'Already connecting...';
     _connecting = true;
@@ -37,7 +37,7 @@ class SshService {
       return null;
     } on SSHAuthAbortError {
       _connecting = false;
-      return 'Authentication failed — check username and password';
+      return 'Authentication failed - check username and password';
     } on SSHAuthFailError {
       _connecting = false;
       return 'Wrong username or password';
@@ -46,7 +46,7 @@ class SshService {
       _client = null;
       final msg = e.toString().replaceAll('Exception: ', '');
       if (msg.contains('Connection refused')) {
-        return 'SSH connection refused. Enable SSH: Administration → Admin Access → SSH';
+        return 'SSH connection refused. Enable SSH: Administration -> Admin Access -> SSH';
       }
       if (msg.contains('timed out') || msg.contains('timeout')) {
         return 'Connection timed out. Check IP and WiFi.';
@@ -60,7 +60,7 @@ class SshService {
     _client = null;
   }
 
-  // ── Run command ────────────────────────────────────────────────────────────
+  //  Run command 
   Future<String> run(String command) async {
     if (!isConnected) throw Exception('Not connected');
     try {
@@ -90,7 +90,7 @@ class SshService {
     }
   }
 
-  // ── Router Status ──────────────────────────────────────────────────────────
+  //  Router Status 
   Future<RouterStatus> getStatus() async {
     try {
       final output = await run('''
@@ -116,18 +116,27 @@ nvram get os_version
     }
   }
 
-  // ── Traffic history (daily / monthly from nvram) ──────────────────────────
+  //  Traffic history (FreshTomato nvram traff-YYYY-MM format) 
   Future<Map<String, dynamic>> getTrafficHistory() async {
     try {
+      // FreshTomato stores traffic as: nvram get traff-YYYY-MM
+      // Format per entry: "rxGB rxKB txGB txKB[rxGB rxKB txGB txKB[..." (one per day)
+      // Also try rstats_data (older Tomato builds)
       final raw = await run(r'''
-echo "=DAILY="
-nvram get traff-$(date +%Y-%m) 2>/dev/null || nvram get wan_ctrafd 2>/dev/null || echo ""
-echo "=MONTHLY="
-for m in $(seq 0 5); do
-  key=$(date -d "-${m} month" +%Y-%m 2>/dev/null || date -v-${m}m +%Y-%m 2>/dev/null)
-  val=$(nvram get "traff-${key}" 2>/dev/null)
-  if [ -n "$val" ]; then echo "${key}:${val}"; fi
+echo "=CURRENT="
+YYMM=$(date +%Y-%m)
+CUR=$(nvram get "traff-${YYMM}" 2>/dev/null)
+echo "${YYMM}:${CUR}"
+echo "=MONTHS="
+for M in 0 1 2 3 4 5; do
+  KEY=$(date -d "-${M} month" +%Y-%m 2>/dev/null || date -v-${M}m +%Y-%m 2>/dev/null || echo "")
+  if [ -n "$KEY" ]; then
+    VAL=$(nvram get "traff-${KEY}" 2>/dev/null)
+    if [ -n "$VAL" ]; then echo "${KEY}:${VAL}"; fi
+  fi
 done
+echo "=RSTATS="
+nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
 ''');
       return _parseTrafficHistory(raw);
     } catch (e) {
@@ -135,57 +144,99 @@ done
     }
   }
 
+  // Parse "rxGB rxKB txGB txKB" into GB total
+  double _parseTraffBytes(String s) {
+    final p = s.trim().split(RegExp(r'\s+'));
+    final gb = double.tryParse(p.isNotEmpty ? p[0] : '') ?? 0;
+    final kb = double.tryParse(p.length > 1 ? p[1] : '') ?? 0;
+    return gb + kb / (1024.0 * 1024.0);
+  }
+
   Map<String, dynamic> _parseTrafficHistory(String raw) {
     final result = <String, dynamic>{
-      'daily': <Map<String, double>>[],
+      'daily':   <Map<String, dynamic>>[],
       'monthly': <Map<String, dynamic>>[],
     };
     try {
-      final sections = _parseSections(raw);
-      // Daily: "day:rxGB rxKB:txGB txKB[...]" format
-      final dailyStr = sections['DAILY']?.firstOrNull ?? '';
-      if (dailyStr.isNotEmpty) {
-        final days = dailyStr.split('[').where((s) => s.isNotEmpty).toList();
-        final dailyList = <Map<String, double>>[];
-        for (int i = 0; i < days.length && i < 31; i++) {
-          final parts = days[i].replaceAll(']','').trim().split(':');
-          if (parts.length >= 2) {
-            final rxParts = parts[0].split(' ');
-            final txParts = parts[1].split(' ');
-            final rxGB = (double.tryParse(rxParts[0]) ?? 0);
-            final rxKB = (double.tryParse(rxParts.length > 1 ? rxParts[1] : '0') ?? 0);
-            final txGB = (double.tryParse(txParts[0]) ?? 0);
-            final txKB = (double.tryParse(txParts.length > 1 ? txParts[1] : '0') ?? 0);
-            dailyList.add({
-              'rx': rxGB + rxKB / (1024 * 1024),
-              'tx': txGB + txKB / (1024 * 1024),
-              'day': (i + 1).toDouble(),
-            });
+      final lines = raw.split('\n');
+      String section = '';
+      final monthData = <String, String>{};
+
+      for (final line in lines) {
+        final t = line.trim();
+        if (t == '=CURRENT=' || t == '=MONTHS=' || t == '=RSTATS=') {
+          section = t;
+          continue;
+        }
+        if (t.isEmpty) continue;
+
+        if (section == '=CURRENT=' || section == '=MONTHS=') {
+          // format: YYYY-MM:rxGB rxKB txGB txKB[rxGB rxKB txGB txKB[...
+          final colonIdx = t.indexOf(':');
+          if (colonIdx < 7) continue;
+          final key = t.substring(0, colonIdx);
+          final val = t.substring(colonIdx + 1).trim();
+          if (val.isNotEmpty && !monthData.containsKey(key)) {
+            monthData[key] = val;
           }
+        }
+      }
+
+      if (monthData.isEmpty) return result;
+
+      // Sort months descending
+      final sortedKeys = monthData.keys.toList()..sort((a, b) => b.compareTo(a));
+
+      // Build monthly totals
+      final monthlyList = <Map<String, dynamic>>[];
+      for (final key in sortedKeys) {
+        final entries = monthData[key]!
+            .split('[')
+            .where((s) => s.isNotEmpty)
+            .toList();
+        double totalRx = 0, totalTx = 0;
+        for (final entry in entries) {
+          final clean = entry.replaceAll(']', '').trim();
+          final parts = clean.split(RegExp(r'\s+'));
+          // FreshTomato format: "rxGB rxKB txGB txKB"
+          if (parts.length >= 4) {
+            totalRx += (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
+            totalTx += (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
+          } else if (parts.length >= 2) {
+            // Older format: "rxKB txKB"
+            totalRx += (double.tryParse(parts[0]) ?? 0) / 1024.0;
+            totalTx += (double.tryParse(parts[1]) ?? 0) / 1024.0;
+          }
+        }
+        if (totalRx > 0 || totalTx > 0) {
+          monthlyList.add({'month': key, 'rx': totalRx, 'tx': totalTx});
+        }
+      }
+      result['monthly'] = monthlyList;
+
+      // Build daily from the most recent month
+      if (sortedKeys.isNotEmpty) {
+        final currentVal = monthData[sortedKeys.first]!;
+        final entries = currentVal
+            .split('[')
+            .where((s) => s.isNotEmpty)
+            .toList();
+        final dailyList = <Map<String, dynamic>>[];
+        for (int i = 0; i < entries.length && i < 31; i++) {
+          final clean = entries[i].replaceAll(']', '').trim();
+          final parts = clean.split(RegExp(r'\s+'));
+          double rx = 0, tx = 0;
+          if (parts.length >= 4) {
+            rx = (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
+            tx = (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
+          } else if (parts.length >= 2) {
+            rx = (double.tryParse(parts[0]) ?? 0) / 1024.0;
+            tx = (double.tryParse(parts[1]) ?? 0) / 1024.0;
+          }
+          dailyList.add({'day': i + 1, 'rx': rx, 'tx': tx});
         }
         result['daily'] = dailyList;
       }
-      // Monthly: "YYYY-MM:rxGB rxKB:txGB txKB"
-      final monthlyList = <Map<String, dynamic>>[];
-      for (final line in sections['MONTHLY'] ?? []) {
-        final idx = line.indexOf(':');
-        if (idx < 0) continue;
-        final month = line.substring(0, idx);
-        final rest = line.substring(idx + 1).split(':');
-        if (rest.length < 2) continue;
-        final rxParts = rest[0].trim().split(' ');
-        final txParts = rest[1].trim().split(' ');
-        final rxGB = (double.tryParse(rxParts[0]) ?? 0);
-        final rxKB = (double.tryParse(rxParts.length > 1 ? rxParts[1] : '0') ?? 0);
-        final txGB = (double.tryParse(txParts[0]) ?? 0);
-        final txKB = (double.tryParse(txParts.length > 1 ? txParts[1] : '0') ?? 0);
-        monthlyList.add({
-          'month': month,
-          'rx': rxGB + rxKB / (1024 * 1024),
-          'tx': txGB + txKB / (1024 * 1024),
-        });
-      }
-      result['monthly'] = monthlyList;
     } catch (_) {}
     return result;
   }
@@ -264,7 +315,7 @@ done
     }
   }
 
-  // ── Devices ────────────────────────────────────────────────────────────────
+  //  Devices 
   Future<List<ConnectedDevice>> getDevices() async {
     try {
       final output = await run(r'''
@@ -349,7 +400,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     return devices;
   }
 
-  // ── Bandwidth ──────────────────────────────────────────────────────────────
+  //  Bandwidth 
   Future<Map<String, int>> getBandwidthRaw() async {
     try {
       final wan = (await run("nvram get wan_iface 2>/dev/null || echo 'vlan2'")).trim();
@@ -368,7 +419,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     }
   }
 
-  // ── Block/Unblock ──────────────────────────────────────────────────────────
+  //  Block/Unblock 
   Future<bool> blockDevice(String mac, bool block) async {
     try {
       final macLower = mac.toLowerCase();
@@ -391,12 +442,12 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     }
   }
 
-  // ── Reboot ─────────────────────────────────────────────────────────────────
+  //  Reboot 
   Future<bool> reboot() async {
     try { await run('reboot'); return true; } catch (_) { return false; }
   }
 
-  // ── Logs ──────────────────────────────────────────────────────────────────
+  //  Logs 
   Future<List<LogEntry>> getLogs() async {
     try {
       // FreshTomato stores logs in /var/log/messages or via logread
@@ -450,7 +501,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
   DateTime _tryParseTime(String s) {
     try {
       final now = DateTime.now();
-      // "Mar  7 11:13:40" → parse with current year
+      // "Mar  7 11:13:40"  parse with current year
       final parts = s.trim().split(RegExp(r'\s+'));
       if (parts.length >= 3) {
         final months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
@@ -468,7 +519,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     return DateTime.now();
   }
 
-  // ── QoS ───────────────────────────────────────────────────────────────────
+  //  QoS 
   Future<List<QosRule>> getQosRules() async {
     try {
       final output = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
@@ -499,7 +550,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     } catch (_) { return false; }
   }
 
-  // ── Port Forward ──────────────────────────────────────────────────────────
+  //  Port Forward 
   Future<List<PortForwardRule>> getPortForwardRules() async {
     try {
       final output = await run('nvram get portforward 2>/dev/null || echo ""');
@@ -529,7 +580,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     } catch (_) { return false; }
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  //  Helpers 
   Map<String, List<String>> _parseSections(String raw) {
     final sections = <String, List<String>>{};
     String? current;

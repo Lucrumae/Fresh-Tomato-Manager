@@ -77,7 +77,7 @@ class _MainShellState extends ConsumerState<MainShell> {
 
     // Short labels so they never wrap or get cut
     const tabDefs = [
-      (Icons.dashboard_rounded,  'Beranda'),
+      (Icons.dashboard_rounded,  'Home'),
       (Icons.devices_rounded,    'Devices'),
       (Icons.show_chart_rounded, 'Bandwidth'),
       (Icons.article_rounded,    'Logs'),
