@@ -76,48 +76,41 @@ class TerminalScreen extends ConsumerStatefulWidget {
   @override ConsumerState<TerminalScreen> createState() => _TS();
 }
 
-class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
+class _TS extends ConsumerState<TerminalScreen> {
   final _scroll = ScrollController();
   final _focus  = FocusNode();
   final _input  = TextEditingController();
   final _lines  = <_Line>[];
   SSHSession? _sess;
   bool _conn=false, _loading=false;
-  bool _isDark=true; // updated each build
   StreamSubscription? _s1, _s2;
   String _buf='';
   final _hist=<String>[];
   int _hi=-1;
-  bool _kb=false;
-
-  // Colors ditentukan saat build berdasarkan theme
+  bool _isDark=true;
 
   @override void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _focus.addListener((){if(mounted)setState((){});});
     _start();
   }
 
   @override void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
     _s1?.cancel(); _s2?.cancel(); _sess?.close();
     _scroll.dispose(); _focus.dispose(); _input.dispose();
     super.dispose();
   }
 
-  @override void didChangeMetrics() {
-    final v = WidgetsBinding.instance.window.viewInsets.bottom > 150;
-    if (v!=_kb && mounted) { setState(()=>_kb=v); if(v) _bot(); }
-  }
+  Color get _bg  => _isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF0F4F8);
+  Color get _bar => _isDark ? const Color(0xFF0F1622) : const Color(0xFFE2E8F0);
+  Color get _brd => _isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
 
   Future<void> _start() async {
-    setState((){ _loading=true; _buf=''; });
+    setState(() { _loading=true; _buf=''; _lines.clear(); });
     _addSys('Connecting...');
     try {
       final ssh = ref.read(sshServiceProvider);
       if (!ssh.isConnected || ssh.client==null) {
-        _addSys('Not connected. Go back and reconnect.'); setState(()=>_loading=false); return;
+        _addSys('Not connected. Tap Reconnect.'); setState(()=>_loading=false); return;
       }
       _sess = await ssh.client!.shell(
         pty: SSHPtyConfig(width:200, height:50, type:'xterm-256color'));
@@ -144,8 +137,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
 
   void _addSys(String t) {
     if(!mounted) return;
-    setState((){ _lines.add(_Line(t,[_Span(t,fg:AppTheme.terminal.withOpacity(0.6))]));
-      if(_lines.length>2000) _lines.removeRange(0,_lines.length-2000); }); _bot();
+    setState((){ _lines.add(_Line(t,[_Span(t,fg:AppTheme.terminal.withOpacity(0.6))])); }); _bot();
   }
 
   void _addAnsi(String raw, {bool partial=false, bool err=false}) {
@@ -196,22 +188,17 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    // Colors mengikuti tema yang dipilih
-    final isDark = Theme.of(context).brightness == Brightness.dark;
-    _isDark = isDark;
-    final bg  = isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF0F4F8);
-    final bar = isDark ? const Color(0xFF0F1622) : const Color(0xFFE2E8F0);
-    final brd = isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
-    final textColor = isDark ? const Color(0xFFCDD6F4) : const Color(0xFF1A202C);
+    _isDark = Theme.of(context).brightness == Brightness.dark;
+    final textColor = _isDark ? const Color(0xFFCDD6F4) : const Color(0xFF1A202C);
 
     return Container(
-      color: bg,
-      child: Column(children:[
+      color: _bg,
+      child: Column(children: [
 
-        // ── TOP BAR: Reconnect button ──────────────────────────────────────
+        // ── TOP BAR ─────────────────────────────────────────────────────────
         Container(
           padding: const EdgeInsets.symmetric(horizontal:12, vertical:6),
-          color: bar,
+          color: _bar,
           child: Row(children:[
             Container(width:8, height:8, decoration:BoxDecoration(
               color:_conn?AppTheme.terminal:Colors.redAccent,
@@ -220,9 +207,8 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
             Text(_conn?'Connected':'Disconnected',
               style:GoogleFonts.jetBrainsMono(
                 color:_conn?AppTheme.terminal:Colors.redAccent,
-                fontSize:12, fontWeight:FontWeight.w500)),
+                fontSize:11, fontWeight:FontWeight.w500)),
             const Spacer(),
-            // Reconnect button
             GestureDetector(
               onTap:(){
                 _s1?.cancel(); _s2?.cancel(); _sess?.close();
@@ -230,16 +216,16 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
                 _start();
               },
               child:Container(
-                padding:const EdgeInsets.symmetric(horizontal:12, vertical:5),
+                padding:const EdgeInsets.symmetric(horizontal:10, vertical:4),
                 decoration:BoxDecoration(
                   color:AppTheme.terminal.withOpacity(0.1),
                   border:Border.all(color:AppTheme.terminal.withOpacity(0.4)),
                   borderRadius:BorderRadius.circular(6)),
                 child:Row(mainAxisSize:MainAxisSize.min, children:[
-                  Icon(Icons.refresh_rounded, color:AppTheme.terminal, size:15),
-                  const SizedBox(width:5),
+                  Icon(Icons.refresh_rounded, color:AppTheme.terminal, size:14),
+                  const SizedBox(width:4),
                   Text('Reconnect',style:GoogleFonts.jetBrainsMono(
-                    color:AppTheme.terminal, fontSize:12)),
+                    color:AppTheme.terminal, fontSize:11)),
                 ]),
               ),
             ),
@@ -248,180 +234,144 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
 
         // ── OUTPUT AREA ──────────────────────────────────────────────────────
         Expanded(
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap:(){
-              if(_focus.hasFocus) _focus.unfocus();
-              else _focus.requestFocus();
-            },
-            child: Container(
-              color:bg, width:double.infinity,
-              child:_loading
-                ? Center(child:Column(mainAxisSize:MainAxisSize.min, children:[
-                    const SizedBox(width:18,height:18,
-                      child:CircularProgressIndicator(color:AppTheme.terminal,strokeWidth:1.5)),
-                    const SizedBox(height:10),
-                    Text('Starting shell...',style:GoogleFonts.jetBrainsMono(
-                      color:AppTheme.terminal,fontSize:12)),
-                  ]))
-                : ListView.builder(
-                    controller:_scroll,
-                    padding:const EdgeInsets.fromLTRB(10,6,10,4),
-                    itemCount:_lines.length,
-                    itemBuilder:(c,i)=>_buildLine(_lines[i]),
-                  ),
-            ),
-          ),
+          child: _loading
+            ? Center(child:Column(mainAxisSize:MainAxisSize.min, children:[
+                const SizedBox(width:18,height:18,
+                  child:CircularProgressIndicator(color:AppTheme.terminal,strokeWidth:1.5)),
+                const SizedBox(height:10),
+                Text('Starting shell...',style:GoogleFonts.jetBrainsMono(
+                  color:AppTheme.terminal,fontSize:11)),
+              ]))
+            : ListView.builder(
+                controller:_scroll,
+                padding:const EdgeInsets.fromLTRB(8,4,8,4),
+                itemCount:_lines.length,
+                itemBuilder:(c,i)=>_buildLine(_lines[i]),
+              ),
         ),
 
-        // ── KEYBOARD TOOLBAR (muncul di atas keyboard) ────────────────────
-        if (_kb) ...[
-          // Row 1 (atas): quick commands — top, free, df, dll
-          Container(
-            height:36,
-            color:bar,
-            child:ListView(
-              scrollDirection:Axis.horizontal,
-              padding:const EdgeInsets.symmetric(horizontal:6,vertical:5),
-              children:_quick.map((q)=>_qBtn(q.$2,()=>_send(q.$1))).toList(),
-            ),
+        // ── ALWAYS-VISIBLE BOTTOM TOOLBAR ────────────────────────────────────
+        Container(
+          decoration: BoxDecoration(
+            color: _bar,
+            border: Border(top: BorderSide(color: _brd)),
           ),
-          // Row 2 (bawah): ctrl keys + history + clear + restart
-          Container(
-            height:36,
-            decoration:BoxDecoration(
-              color:isDark?const Color(0xFF080C14):const Color(0xFFD8E0EC),
-              border:Border(top:BorderSide(color:brd))),
-            child:ListView(
-              scrollDirection:Axis.horizontal,
-              padding:const EdgeInsets.symmetric(horizontal:6,vertical:5),
-              children:[
-                _cBtn('↑',_hUp, col:Colors.white70),
-                _cBtn('↓',_hDn, col:Colors.white70),
-                _sep(),
-                _cBtn('^C',()=>_raw([3])),
-                _cBtn('^D',()=>_raw([4])),
-                _cBtn('^Z',()=>_raw([26])),
-                _cBtn('^L',()=>_raw([12])),
-                _cBtn('^A',()=>_raw([1])),
-                _cBtn('^E',()=>_raw([5])),
-                _cBtn('^U',()=>_raw([21])),
-                _cBtn('^W',()=>_raw([23])),
-                _cBtn('^R',()=>_raw([18])),
-                _cBtn('Tab',()=>_raw([9]), col:Colors.white54),
-                _cBtn('Esc',()=>_raw([27]), col:Colors.white54),
-                _sep(),
-                _cBtn('Clear',()=>setState(()=>_lines.clear()), col:AppTheme.warning),
-              ],
-            ),
-          ),
-          // Input bar
-          Container(
-            color:bar,
-            padding:const EdgeInsets.fromLTRB(10,2,10,6),
-            child:Row(children:[
-              Text('# ',style:GoogleFonts.jetBrainsMono(
-                color:AppTheme.terminal,fontSize:13,fontWeight:FontWeight.bold)),
-              Expanded(child:TextField(
-                controller:_input, focusNode:_focus, enabled:_conn,
-                style:GoogleFonts.jetBrainsMono(color:Colors.white,fontSize:13),
-                cursorColor:AppTheme.terminal,
-                decoration:InputDecoration(
-                  isDense:true,border:InputBorder.none,
-                  enabledBorder:InputBorder.none,focusedBorder:InputBorder.none,
-                  filled:false,contentPadding:const EdgeInsets.symmetric(vertical:8),
-                  hintText:'command...',
-                  hintStyle:TextStyle(color:isDark?const Color(0xFF2E3F55):const Color(0xFF8A9AB5),fontSize:13)),
-                onSubmitted:_send, textInputAction:TextInputAction.send,
-              )),
-              GestureDetector(
-                onTap:()=>_send(_input.text),
-                child:const Padding(padding:EdgeInsets.all(6),
-                  child:Icon(Icons.send_rounded,color:AppTheme.terminal,size:17))),
-            ]),
-          ),
-        ],
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
 
-        // ── BOTTOM BAR: status + quick cmds (saat keyboard tertutup) ─────
-        if (!_kb)
-          Container(
-            height:36,
-            decoration:BoxDecoration(color:bar,
-              border:Border(top:BorderSide(color:brd))),
-            child:Row(children:[
-              GestureDetector(
-                onTap:()=>_focus.requestFocus(),
-                child:Container(
-                  padding:const EdgeInsets.symmetric(horizontal:10),
-                  child:Icon(Icons.keyboard_rounded,
-                    color:AppTheme.terminal.withOpacity(0.6),size:16)),
+            // Row 1: Quick commands
+            SizedBox(
+              height: 34,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal:6, vertical:5),
+                children: _quick.map((q) => _qBtn(q.$2, ()=>_send(q.$1))).toList(),
               ),
-              Expanded(child:ListView(
-                scrollDirection:Axis.horizontal,
-                padding:const EdgeInsets.symmetric(vertical:5),
-                children:_quick.map((q)=>Padding(
-                  padding:const EdgeInsets.only(right:5),
-                  child:GestureDetector(
-                    onTap:()=>_send(q.$1),
-                    child:Container(
-                      padding:const EdgeInsets.symmetric(horizontal:9,vertical:2),
-                      decoration:BoxDecoration(
-                        border:Border.all(color:AppTheme.terminal.withOpacity(0.25)),
-                        borderRadius:BorderRadius.circular(4)),
-                      child:Text(q.$2,style:GoogleFonts.jetBrainsMono(
-                        color:AppTheme.terminal,fontSize:11)),
-                    )),
-                )).toList(),
-              )),
-            ]),
-          ),
+            ),
 
-        // Hidden input so keyboard can be triggered
-        SizedBox(height:0, child:Opacity(opacity:0, child:TextField(
-          focusNode:_focus, controller:_input,
-          onSubmitted:_send, textInputAction:TextInputAction.send,
-        ))),
+            Divider(height:1, color:_brd),
+
+            // Row 2: Ctrl keys
+            SizedBox(
+              height: 34,
+              child: ListView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal:6, vertical:5),
+                children: [
+                  _cBtn('↑', _hUp, col:Colors.white70),
+                  _cBtn('↓', _hDn, col:Colors.white70),
+                  _sep(),
+                  _cBtn('^C', ()=>_raw([3])),
+                  _cBtn('^D', ()=>_raw([4])),
+                  _cBtn('^Z', ()=>_raw([26])),
+                  _cBtn('^L', ()=>_raw([12])),
+                  _cBtn('^A', ()=>_raw([1])),
+                  _cBtn('^E', ()=>_raw([5])),
+                  _cBtn('^U', ()=>_raw([21])),
+                  _cBtn('^W', ()=>_raw([23])),
+                  _cBtn('^R', ()=>_raw([18])),
+                  _cBtn('Tab', ()=>_raw([9]), col:Colors.white54),
+                  _cBtn('Esc', ()=>_raw([27]), col:Colors.white54),
+                  _sep(),
+                  _cBtn('Clear', ()=>setState(()=>_lines.clear()), col:AppTheme.warning),
+                ],
+              ),
+            ),
+
+            Divider(height:1, color:_brd),
+
+            // Row 3: Input bar (always visible)
+            Container(
+              color: _bar,
+              padding: const EdgeInsets.fromLTRB(10,4,10,6),
+              child: Row(children:[
+                Text('# ', style:GoogleFonts.jetBrainsMono(
+                  color:AppTheme.terminal, fontSize:13, fontWeight:FontWeight.bold)),
+                Expanded(child:TextField(
+                  controller:_input, focusNode:_focus, enabled:_conn,
+                  style:GoogleFonts.jetBrainsMono(color:textColor, fontSize:13),
+                  cursorColor:AppTheme.terminal,
+                  decoration:InputDecoration(
+                    isDense:true, border:InputBorder.none,
+                    enabledBorder:InputBorder.none, focusedBorder:InputBorder.none,
+                    filled:false,
+                    contentPadding:const EdgeInsets.symmetric(vertical:6),
+                    hintText:'command...',
+                    hintStyle:TextStyle(
+                      color:_isDark?const Color(0xFF2E3F55):const Color(0xFF8A9AB5),
+                      fontSize:13)),
+                  onSubmitted:_send, textInputAction:TextInputAction.send,
+                )),
+                GestureDetector(
+                  onTap:()=>_send(_input.text),
+                  child:Padding(padding:const EdgeInsets.all(6),
+                    child:Icon(Icons.send_rounded, color:AppTheme.terminal, size:17))),
+              ]),
+            ),
+
+          ]),
+        ),
+
       ]),
     );
   }
 
   Widget _buildLine(_Line l) {
-    if(l.spans.isEmpty) return const SizedBox(height:15);
-    return RichText(text:TextSpan(children:l.spans.map((s)=>TextSpan(
-      text:s.text,
-      style:GoogleFonts.jetBrainsMono(
-        fontSize:12, height:1.4,
-        color:s.fg??(_isDark?const Color(0xFFCDD6F4):const Color(0xFF1A202C)),
-        backgroundColor:s.bg,
-        fontWeight:s.bold?FontWeight.bold:FontWeight.normal),
-    )).toList()));
+    if(l.spans.isEmpty) return const SizedBox(height:13);
+    return RichText(
+      text:TextSpan(children:l.spans.map((s)=>TextSpan(
+        text:s.text,
+        style:GoogleFonts.jetBrainsMono(
+          fontSize:10.5,  // kecil
+          height:1.35,
+          color:s.fg??(_isDark?const Color(0xFFCDD6F4):const Color(0xFF1A202C)),
+          backgroundColor:s.bg,
+          fontWeight:s.bold?FontWeight.bold:FontWeight.normal),
+      )).toList()),
+    );
   }
 
   Widget _qBtn(String label, VoidCallback fn) =>
     GestureDetector(onTap:fn, child:Container(
       margin:const EdgeInsets.only(right:5),
-      padding:const EdgeInsets.symmetric(horizontal:10,vertical:3),
+      padding:const EdgeInsets.symmetric(horizontal:9, vertical:2),
       decoration:BoxDecoration(
         border:Border.all(color:AppTheme.terminal.withOpacity(0.3)),
         borderRadius:BorderRadius.circular(4)),
-      child:Text(label,style:GoogleFonts.jetBrainsMono(
-        color:AppTheme.terminal,fontSize:11))));
+      child:Text(label, style:GoogleFonts.jetBrainsMono(
+        color:AppTheme.terminal, fontSize:11))));
 
   Widget _cBtn(String label, VoidCallback fn, {Color? col}) =>
     GestureDetector(onTap:fn, child:Container(
       margin:const EdgeInsets.only(right:4),
-      padding:const EdgeInsets.symmetric(horizontal:8,vertical:3),
+      padding:const EdgeInsets.symmetric(horizontal:7, vertical:2),
       decoration:BoxDecoration(
         color:(col??AppTheme.terminal).withOpacity(0.08),
         border:Border.all(color:(col??AppTheme.terminal).withOpacity(0.3)),
         borderRadius:BorderRadius.circular(4)),
-      child:Text(label,style:GoogleFonts.jetBrainsMono(
-        color:col??AppTheme.terminal,fontSize:11,fontWeight:FontWeight.w500))));
+      child:Text(label, style:GoogleFonts.jetBrainsMono(
+        color:col??AppTheme.terminal, fontSize:11, fontWeight:FontWeight.w500))));
 
-  Widget _sep() {
-    final isDark = _isDark;
-    final brd = isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
-    return Container(width:1, color:brd,
-      margin:const EdgeInsets.symmetric(horizontal:4,vertical:5));
-  }
+  Widget _sep() => Container(
+    width:1, color:_brd,
+    margin:const EdgeInsets.symmetric(horizontal:4, vertical:4));
 }

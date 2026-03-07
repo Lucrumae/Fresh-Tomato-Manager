@@ -23,7 +23,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   bool _obscure   = true;
   bool _connecting = false;
   bool _rememberMe = false;
-  bool _showBanner = false;
   String? _error;
   int _step = 0;
 
@@ -38,8 +37,28 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     super.initState();
     _loadSaved();
     if (widget.reconnectFailed) {
-      _showBanner = true;
       _step = 1; // skip welcome, go straight to form
+      // Show bottom snackbar after first frame
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(children: [
+              Icon(Icons.wifi_off_rounded, color: Colors.white, size: 16),
+              SizedBox(width: 10),
+              Expanded(child: Text(
+                'Failed to reconnect. Please login again.',
+                style: TextStyle(fontSize: 13),
+              )),
+            ]),
+            backgroundColor: AppTheme.danger,
+            duration: const Duration(seconds: 6),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.fromLTRB(12, 0, 12, 16),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+        );
+      });
     }
   }
 
@@ -211,34 +230,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final isDark = ref.watch(darkModeProvider);
     final c = Theme.of(context).extension<AppColors>()!;
 
-    return Column(
-      children: [
-        // ── Failed reconnect banner ────────────────────────────────────
-        if (_showBanner)
-          Material(
-            color: AppTheme.danger,
-            child: SafeArea(
-              bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Row(children: [
-                  const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 18),
-                  const SizedBox(width: 10),
-                  const Expanded(child: Text(
-                    'Failed to reconnect. Please login again.',
-                    style: TextStyle(color: Colors.white,
-                      fontSize: 13, fontWeight: FontWeight.w500),
-                  )),
-                  GestureDetector(
-                    onTap: () => setState(() => _showBanner = false),
-                    child: const Icon(Icons.close_rounded,
-                      color: Colors.white70, size: 18),
-                  ),
-                ]),
-              ),
-            ),
-          ),
-        Expanded(child: SingleChildScrollView(
+    return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -426,8 +418,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           const SizedBox(height: 32),
         ],
       ),
-    )),  // Expanded + SingleChildScrollView
-      ],
-    );  // Column
+    );
   }
 }

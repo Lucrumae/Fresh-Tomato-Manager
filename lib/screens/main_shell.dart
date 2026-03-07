@@ -26,12 +26,9 @@ class _MainShellState extends ConsumerState<MainShell> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      // Start pollers
       ref.read(routerStatusProvider.notifier).startPolling();
       ref.read(devicesProvider.notifier).startPolling();
       ref.read(bandwidthProvider.notifier).startPolling();
-
-      // Start keeper — wire up the onFailed callback
       final keeper = ref.read(connectionKeeperProvider);
       keeper.onFailed = _onReconnectFailed;
       keeper.start();
@@ -47,10 +44,8 @@ class _MainShellState extends ConsumerState<MainShell> {
     super.dispose();
   }
 
-  // Called by ConnectionKeeper on background isolate → dispatch to main thread
   void _onReconnectFailed() {
     if (!mounted) return;
-    // Use addPostFrameCallback to be safe (may be called from timer callback)
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       _redirectToLogin();
@@ -62,8 +57,6 @@ class _MainShellState extends ConsumerState<MainShell> {
     ref.read(devicesProvider.notifier).stopPolling();
     ref.read(bandwidthProvider.notifier).stopPolling();
     await ref.read(sshServiceProvider).disconnect();
-    // Do NOT clear configProvider so "remember me" data is preserved
-
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute(
@@ -78,14 +71,15 @@ class _MainShellState extends ConsumerState<MainShell> {
     final l = AppL10n.of(context);
     final c = Theme.of(context).extension<AppColors>()!;
 
-    final tabs = [
-      (Icons.dashboard_rounded,  l.dashboard, false),
-      (Icons.devices_rounded,    l.devices,   false),
-      (Icons.show_chart_rounded, l.bandwidth, false),
-      (Icons.article_rounded,    l.logs,      false),
-      (Icons.folder_rounded,     'Files',     false),
-      (Icons.terminal_rounded,   l.terminal,  true),
-      (Icons.settings_rounded,   l.settings,  false),
+    // Short labels so they never wrap or get cut
+    const tabDefs = [
+      (Icons.dashboard_rounded,  'Beranda'),
+      (Icons.devices_rounded,    'Devices'),
+      (Icons.show_chart_rounded, 'Bandwidth'),
+      (Icons.article_rounded,    'Logs'),
+      (Icons.folder_rounded,     'Files'),
+      (Icons.terminal_rounded,   'Terminal'),
+      (Icons.settings_rounded,   'Settings'),
     ];
 
     final screens = [
@@ -94,32 +88,39 @@ class _MainShellState extends ConsumerState<MainShell> {
       const BandwidthScreen(),
       const LogsScreen(),
       const FilesScreen(),
-      const _TerminalTab(),
+      const TerminalScreen(),
       const SettingsScreen(),
     ];
 
     return Scaffold(
       body: IndexedStack(index: _index, children: screens),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
-        backgroundColor: c.cardBg,
-        indicatorColor: AppTheme.primary.withOpacity(0.15),
-        labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
-        destinations: tabs.map((t) => NavigationDestination(
-          icon: Icon(t.$1, color: t.$3 ? AppTheme.terminal : null),
-          selectedIcon: Icon(t.$1,
-            color: t.$3 ? AppTheme.terminal : AppTheme.primary),
-          label: t.$2,
-        )).toList(),
+      bottomNavigationBar: Theme(
+        data: Theme.of(context).copyWith(
+          navigationBarTheme: NavigationBarThemeData(
+            labelTextStyle: WidgetStateProperty.all(
+              const TextStyle(fontSize: 10, fontWeight: FontWeight.w500),
+            ),
+          ),
+        ),
+        child: NavigationBar(
+          selectedIndex: _index,
+          onDestinationSelected: (i) => setState(() => _index = i),
+          backgroundColor: c.cardBg,
+          indicatorColor: AppTheme.primary.withOpacity(0.15),
+          height: 62,
+          labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
+          destinations: tabDefs.map((t) {
+            final isTerminal = t.$1 == Icons.terminal_rounded;
+            return NavigationDestination(
+              icon: Icon(t.$1, size: 22,
+                color: isTerminal ? AppTheme.terminal.withOpacity(0.6) : null),
+              selectedIcon: Icon(t.$1, size: 22,
+                color: isTerminal ? AppTheme.terminal : AppTheme.primary),
+              label: t.$2,
+            );
+          }).toList(),
+        ),
       ),
     );
   }
-}
-
-// ── Terminal tab wrapper ───────────────────────────────────────────────────────
-class _TerminalTab extends StatelessWidget {
-  const _TerminalTab();
-  @override
-  Widget build(BuildContext context) => const TerminalScreen();
 }
