@@ -171,7 +171,6 @@ class _TS extends ConsumerState<TerminalScreen> {
     _hi=-1;
     _sess!.stdin.add(Uint8List.fromList('$cmd\n'.codeUnits));
     _input.clear();
-    // Keep focus — do NOT unfocus so keyboard stays open
     _focus.requestFocus();
     _bot();
   }
@@ -331,10 +330,14 @@ class _TS extends ConsumerState<TerminalScreen> {
                     enabled:_conn,
                     style:GoogleFonts.jetBrainsMono(color:textColor, fontSize:13),
                     cursorColor:_accent,
-                    // textInputAction.newline = Enter key stays open (no dismiss)
-                    textInputAction:TextInputAction.newline,
-                    keyboardType:TextInputType.multiline,
+                    textInputAction:TextInputAction.done,
+                    keyboardType:TextInputType.text,
                     maxLines:1,
+                    onSubmitted:(val) {
+                      _send(val);
+                      // Re-request focus immediately to keep keyboard open
+                      Future.microtask(() => _focus.requestFocus());
+                    },
                     decoration:InputDecoration(
                       isDense:true,
                       border:InputBorder.none,
@@ -346,8 +349,6 @@ class _TS extends ConsumerState<TerminalScreen> {
                       hintStyle:TextStyle(
                         color:_isDark ? const Color(0xFF2E3F55) : const Color(0xFF8A9AB5),
                         fontSize:13)),
-                    // onSubmitted is NOT used — we rely on the send button only
-                    // so Enter/newline just adds to input (like Termius behaviour)
                   )),
                   // Send button (tap to execute)
                   GestureDetector(

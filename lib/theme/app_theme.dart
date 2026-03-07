@@ -151,6 +151,47 @@ class AppTheme {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
         behavior: SnackBarBehavior.floating,
       ),
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: surf,
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: acc.withOpacity(0.15),
+        iconTheme: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return IconThemeData(color: acc, size: 22);
+          }
+          return IconThemeData(color: txtMut, size: 22);
+        }),
+        labelTextStyle: WidgetStateProperty.resolveWith((states) {
+          if (states.contains(WidgetState.selected)) {
+            return GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: acc);
+          }
+          return GoogleFonts.inter(fontSize: 10, color: txtMut);
+        }),
+      ),
+      switchTheme: SwitchThemeData(
+        thumbColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected) ? acc : null),
+        trackColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected) ? acc.withOpacity(0.4) : null),
+      ),
+      checkboxTheme: CheckboxThemeData(
+        fillColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected) ? acc : null),
+      ),
+      radioTheme: RadioThemeData(
+        fillColor: WidgetStateProperty.resolveWith((s) =>
+          s.contains(WidgetState.selected) ? acc : null),
+      ),
+      textSelectionTheme: TextSelectionThemeData(
+        cursorColor: acc,
+        selectionColor: acc.withOpacity(0.3),
+        selectionHandleColor: acc,
+      ),
+      progressIndicatorTheme: ProgressIndicatorThemeData(color: acc),
+      floatingActionButtonTheme: FloatingActionButtonThemeData(
+        backgroundColor: acc,
+        foregroundColor: Colors.white,
+      ),
       extensions: [
         AppColors(
           background: bg, surface: surf, cardBg: card, border: bord,
