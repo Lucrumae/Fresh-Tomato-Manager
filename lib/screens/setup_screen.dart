@@ -9,7 +9,8 @@ import '../services/app_state.dart';
 import 'main_shell.dart';
 
 class SetupScreen extends ConsumerStatefulWidget {
-  const SetupScreen({super.key});
+  final bool reconnectFailed;
+  const SetupScreen({super.key, this.reconnectFailed = false});
   @override
   ConsumerState<SetupScreen> createState() => _SetupScreenState();
 }
@@ -22,6 +23,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   bool _obscure   = true;
   bool _connecting = false;
   bool _rememberMe = false;
+  bool _showBanner = false;
   String? _error;
   int _step = 0;
 
@@ -35,6 +37,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   void initState() {
     super.initState();
     _loadSaved();
+    if (widget.reconnectFailed) {
+      _showBanner = true;
+      _step = 1; // skip welcome, go straight to form
+    }
   }
 
   Future<void> _loadSaved() async {
@@ -205,7 +211,34 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final isDark = ref.watch(darkModeProvider);
     final c = Theme.of(context).extension<AppColors>()!;
 
-    return SingleChildScrollView(
+    return Column(
+      children: [
+        // ── Failed reconnect banner ────────────────────────────────────
+        if (_showBanner)
+          Material(
+            color: AppTheme.danger,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(children: [
+                  const Icon(Icons.wifi_off_rounded, color: Colors.white, size: 18),
+                  const SizedBox(width: 10),
+                  const Expanded(child: Text(
+                    'Failed to reconnect. Please login again.',
+                    style: TextStyle(color: Colors.white,
+                      fontSize: 13, fontWeight: FontWeight.w500),
+                  )),
+                  GestureDetector(
+                    onTap: () => setState(() => _showBanner = false),
+                    child: const Icon(Icons.close_rounded,
+                      color: Colors.white70, size: 18),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        Expanded(child: SingleChildScrollView(
       padding: const EdgeInsets.all(24),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -393,6 +426,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           const SizedBox(height: 32),
         ],
       ),
-    );
+    )),  // Expanded + SingleChildScrollView
+      ],
+    );  // Column
   }
 }

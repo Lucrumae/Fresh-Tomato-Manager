@@ -3,90 +3,76 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'ssh_service.dart';
 import 'app_state.dart';
-import '../models/models.dart';
 
-// Keeps SSH connection alive and auto-reconnects when app resumes
-class ConnectionKeeper extends WidgetsBindingObserver {
+// Callback when reconnect fails — main_shell will handle redirect
+typedef OnReconnectFailed = void Function();
+
+class ConnectionKeeper {
   final Ref _ref;
-  Timer? _keepAliveTimer;
-  Timer? _reconnectTimer;
-  bool _wasConnected = false;
+  OnReconnectFailed? onFailed;
+
+  Timer? _pingTimer;
+  bool _inFlight = false;   // prevent overlapping checks
 
   ConnectionKeeper(this._ref);
 
   void start() {
-    WidgetsBinding.instance.addObserver(this);
-    // Ping every 30s to keep connection alive (sends empty command)
-    _keepAliveTimer = Timer.periodic(const Duration(seconds: 30), (_) => _ping());
+    stop();
+    // Ping every 5s — realtime detection
+    _pingTimer = Timer.periodic(const Duration(seconds: 5), (_) => _tick());
   }
 
   void stop() {
-    WidgetsBinding.instance.removeObserver(this);
-    _keepAliveTimer?.cancel();
-    _reconnectTimer?.cancel();
+    _pingTimer?.cancel();
+    _pingTimer = null;
+    _inFlight = false;
   }
 
-  Future<void> _ping() async {
-    final ssh = _ref.read(sshServiceProvider);
-    if (!ssh.isConnected) {
-      _scheduleReconnect();
-      return;
-    }
+  Future<void> _tick() async {
+    if (_inFlight) return;
+    _inFlight = true;
     try {
-      await ssh.run('echo 1').timeout(const Duration(seconds: 5));
-      _wasConnected = true;
-    } catch (_) {
-      _scheduleReconnect();
+      final ssh = _ref.read(sshServiceProvider);
+
+      // Already connected → quick ping to verify
+      if (ssh.isConnected) {
+        try {
+          await ssh.run('echo 1').timeout(const Duration(seconds: 4));
+        } catch (_) {
+          // Ping failed → try reconnect once immediately
+          await _reconnectOnce();
+        }
+      } else {
+        // Was disconnected → try reconnect once immediately
+        await _reconnectOnce();
+      }
+    } finally {
+      _inFlight = false;
     }
   }
 
-  void _scheduleReconnect() {
-    if (_reconnectTimer?.isActive == true) return;
-    _reconnectTimer = Timer(const Duration(seconds: 3), _reconnect);
-  }
+  Future<void> _reconnectOnce() async {
+    final ssh  = _ref.read(sshServiceProvider);
+    final cfg  = _ref.read(configProvider);
+    if (cfg == null) return;
+    if (ssh.isConnected) return; // recovered by other means
 
-  Future<void> _reconnect() async {
-    final config = _ref.read(configProvider);
-    if (config == null) return;
+    debugPrint('[ConnectionKeeper] Reconnecting...');
+    final err = await ssh.connect(cfg).timeout(
+      const Duration(seconds: 8), onTimeout: () => 'timeout',
+    );
 
-    final ssh = _ref.read(sshServiceProvider);
-    if (ssh.isConnected) return;
-
-    debugPrint('ConnectionKeeper: Reconnecting...');
-    final error = await ssh.connect(config);
-    if (error == null) {
-      debugPrint('ConnectionKeeper: Reconnected!');
+    if (err == null) {
+      debugPrint('[ConnectionKeeper] Reconnected OK');
       // Restart pollers
       _ref.read(routerStatusProvider.notifier).startPolling();
       _ref.read(devicesProvider.notifier).startPolling();
       _ref.read(bandwidthProvider.notifier).startPolling();
     } else {
-      debugPrint('ConnectionKeeper: Reconnect failed: $error');
-      // Try again in 10s
-      _reconnectTimer = Timer(const Duration(seconds: 10), _reconnect);
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    switch (state) {
-      case AppLifecycleState.resumed:
-        // App came back to foreground - check connection immediately
-        debugPrint('ConnectionKeeper: App resumed, checking connection...');
-        Future.delayed(const Duration(milliseconds: 500), () async {
-          final ssh = _ref.read(sshServiceProvider);
-          if (!ssh.isConnected) {
-            debugPrint('ConnectionKeeper: Disconnected while in background, reconnecting...');
-            await _reconnect();
-          }
-        });
-        break;
-      case AppLifecycleState.paused:
-        // Keep the timer running so SSH stays alive
-        debugPrint('ConnectionKeeper: App paused, keeping connection alive...');
-        break;
-      default:
-        break;
+      debugPrint('[ConnectionKeeper] Reconnect failed: $err');
+      // Notify UI — only once per disconnect event
+      stop(); // stop pinging until user re-logins
+      onFailed?.call();
     }
   }
 }
