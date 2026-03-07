@@ -247,11 +247,6 @@ class _BandwidthBody extends StatelessWidget {
               return _UsageHistoryCard(daily: daily, monthly: monthly);
             },
           ),
-          const SizedBox(height: 24),
-
-          // ── QoS section ──────────────────────────────────────────────────
-          _SectionHeader(title: 'QoS', icon: Icons.speed_rounded, color: accent),
-          const SizedBox(height: 12),
           const SizedBox(height: 80),
         ],
       ),
@@ -551,6 +546,7 @@ class _QosFullPageState extends ConsumerState<_QosFullPage> {
 }
 
 class _QosBasicTab extends ConsumerWidget {
+  const _QosBasicTab({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final basic = ref.watch(qosBasicProvider);
@@ -581,6 +577,7 @@ class _QosBasicTab extends ConsumerWidget {
 }
 
 class _QosClassifyTab extends ConsumerWidget {
+  const _QosClassifyTab({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final rules = ref.watch(qosClassifyProvider);
@@ -634,6 +631,7 @@ class _QosClassifyTab extends ConsumerWidget {
 }
 
 class _QosConnectionsTab extends ConsumerWidget {
+  const _QosConnectionsTab({super.key});
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final conns = ref.watch(qosConnProvider);
