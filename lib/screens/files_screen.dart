@@ -337,8 +337,8 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       context: context, isScrollControlled: true,
       backgroundColor: _bar,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16))
-    )),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (_) => DraggableScrollableSheet(
         expand: false, initialChildSize: 0.85, maxChildSize: 0.95, minChildSize: 0.4,
         builder: (_, sc) => Column(children: [
@@ -547,6 +547,7 @@ class _EntryRow extends StatelessWidget {
     final tileBg = isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF8FAFC);
     final nameCol = isDark ? const Color(0xFFE2E8F5) : const Color(0xFF1A202C);
     final subCol  = isDark ? const Color(0xFF6B7A99) : const Color(0xFF718096);
+    final _accent = Theme.of(context).extension<AppColors>()?.accent ?? const Color(0xFF00E5A0);
 
     return Material(
       color: tileBg,

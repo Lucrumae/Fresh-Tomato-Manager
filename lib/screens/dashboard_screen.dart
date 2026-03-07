@@ -70,24 +70,27 @@ class DashboardScreen extends ConsumerWidget {
             sliver: SliverList(delegate: SliverChildListDelegate([
 
               // ── Status cards row ─────────────────────────────────────────
-              Row(children: [
-                Expanded(child: _StatCard(
-                  label: 'CPU',
-                  value: status.cpuUsage,
-                  percent: status.cpuPercent / 100,
-                  color: _percentColor(status.cpuPercent),
-                  icon: Icons.memory_rounded,
-                ).animate().fadeIn().slideY(begin: 0.1)),
-                const SizedBox(width: 12),
-                Expanded(child: _StatCard(
-                  label: 'RAM',
-                  value: status.ramUsage,
-                  sublabel: '/ ${status.ramTotal}',
-                  percent: status.ramPercent / 100,
-                  color: _percentColor(status.ramPercent),
-                  icon: Icons.storage_rounded,
-                ).animate(delay: 50.ms).fadeIn().slideY(begin: 0.1)),
-              ]),
+              Builder(builder: (bCtx) {
+                final acc = Theme.of(bCtx).extension<AppColors>()?.accent;
+                return Row(children: [
+                  Expanded(child: _StatCard(
+                    label: 'CPU',
+                    value: status.cpuUsage,
+                    percent: status.cpuPercent / 100,
+                    color: _percentColor(status.cpuPercent, acc),
+                    icon: Icons.memory_rounded,
+                  ).animate().fadeIn().slideY(begin: 0.1)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _StatCard(
+                    label: 'RAM',
+                    value: status.ramUsage,
+                    sublabel: '/ \${status.ramTotal}',
+                    percent: status.ramPercent / 100,
+                    color: _percentColor(status.ramPercent, acc),
+                    icon: Icons.storage_rounded,
+                  ).animate(delay: 50.ms).fadeIn().slideY(begin: 0.1)),
+                ]);
+              }),
               const SizedBox(height: 12),
 
               // ── Bandwidth quick view ─────────────────────────────────────
@@ -171,10 +174,10 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  Color _percentColor(double p, Color accent) {
+  Color _percentColor(double p, [Color? accent]) {
     if (p > 80) return AppTheme.danger;
     if (p > 60) return AppTheme.warning;
-    return accent;
+    return accent ?? AppTheme.success;
   }
 }
 
