@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
 import 'setup_screen.dart';
@@ -11,25 +12,24 @@ class SettingsScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final l = AppL10n.of(context);
     final config = ref.watch(configProvider);
     final isDark = ref.watch(darkModeProvider);
     final c = Theme.of(context).extension<AppColors>()!;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Settings', style: Theme.of(context).textTheme.titleLarge),
+        title: Text(l.settings, style: Theme.of(context).textTheme.titleLarge),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-
-          // Connection info card
           AppCard(
             child: Row(children: [
               Container(
                 width: 48, height: 48,
                 decoration: BoxDecoration(
-                  color: AppTheme.primaryLight.withOpacity(c.isDark ? 0.15 : 1),
+                  color: AppTheme.primaryLight.withOpacity(isDark ? 0.15 : 1),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: const Icon(Icons.terminal_rounded, color: AppTheme.primary),
@@ -38,8 +38,7 @@ class SettingsScreen extends ConsumerWidget {
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(config?.host ?? '-',
-                    style: Theme.of(context).textTheme.titleSmall),
+                  Text(config?.host ?? '-', style: Theme.of(context).textTheme.titleSmall),
                   Text('${config?.username ?? 'root'} · SSH :${config?.sshPort ?? 22}',
                     style: Theme.of(context).textTheme.bodySmall),
                 ],
@@ -47,13 +46,13 @@ class SettingsScreen extends ConsumerWidget {
               TextButton(
                 onPressed: () => Navigator.push(context,
                   MaterialPageRoute(builder: (_) => const SetupScreen())),
-                child: const Text('Ubah'),
+                child: Text(l.btnChange),
               ),
             ]),
           ),
           const SizedBox(height: 20),
 
-          _sectionLabel(context, 'Tampilan'),
+          _label(context, l.display),
           const SizedBox(height: 8),
           AppCard(
             child: Row(children: [
@@ -63,14 +62,17 @@ class SettingsScreen extends ConsumerWidget {
                   color: AppTheme.secondary.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(10),
                 ),
-                child: const Icon(Icons.dark_mode_rounded, color: AppTheme.secondary, size: 20),
+                child: Icon(
+                  isDark ? Icons.wb_sunny_rounded : Icons.dark_mode_rounded,
+                  color: AppTheme.secondary, size: 20,
+                ),
               ),
               const SizedBox(width: 12),
               Expanded(child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Dark Mode', style: Theme.of(context).textTheme.titleSmall),
-                  Text(isDark ? 'Aktif' : 'Nonaktif',
+                  Text(l.darkMode, style: Theme.of(context).textTheme.titleSmall),
+                  Text(isDark ? l.darkModeOn : l.darkModeOff,
                     style: Theme.of(context).textTheme.bodySmall),
                 ],
               )),
@@ -83,36 +85,36 @@ class SettingsScreen extends ConsumerWidget {
           ),
 
           const SizedBox(height: 20),
-          _sectionLabel(context, 'Jaringan'),
+          _label(context, l.network),
           const SizedBox(height: 8),
-          _tile(context,
+          _tile(context, l,
             icon: Icons.speed_rounded, color: AppTheme.secondary,
-            title: 'QoS Rules', subtitle: 'Bandwidth limit per device',
+            title: l.qosRules, subtitle: l.qosSubtitle,
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const QosScreen())),
           ),
           const SizedBox(height: 8),
-          _tile(context,
+          _tile(context, l,
             icon: Icons.lan_rounded, color: AppTheme.success,
-            title: 'Port Forwarding', subtitle: 'Kelola open ports',
+            title: l.portForward, subtitle: l.portForwardSubtitle,
             onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const PortForwardScreen())),
           ),
 
           const SizedBox(height: 20),
-          _sectionLabel(context, 'Router'),
+          _label(context, 'Router'),
           const SizedBox(height: 8),
-          _tile(context,
+          _tile(context, l,
             icon: Icons.restart_alt_rounded, color: AppTheme.warning,
-            title: 'Reboot Router', subtitle: 'Restart router via SSH',
-            onTap: () => _confirmReboot(context, ref),
+            title: l.rebootRouter, subtitle: l.rebootSubtitle,
+            onTap: () => _confirmReboot(context, ref, l),
           ),
 
           const SizedBox(height: 20),
-          _sectionLabel(context, 'App'),
+          _label(context, 'App'),
           const SizedBox(height: 8),
-          _tile(context,
+          _tile(context, l,
             icon: Icons.logout_rounded, color: AppTheme.danger,
-            title: 'Disconnect', subtitle: 'Hapus konfigurasi dan logout',
-            onTap: () => _confirmDisconnect(context, ref),
+            title: l.btnDisconnect, subtitle: l.disconnectMessage,
+            onTap: () => _confirmDisconnect(context, ref, l),
           ),
 
           const SizedBox(height: 32),
@@ -124,13 +126,13 @@ class SettingsScreen extends ConsumerWidget {
     );
   }
 
-  Widget _sectionLabel(BuildContext context, String label) =>
-    Text(label, style: Theme.of(context).textTheme.bodySmall?.copyWith(
+  Widget _label(BuildContext context, String text) =>
+    Text(text, style: Theme.of(context).textTheme.bodySmall?.copyWith(
       color: Theme.of(context).extension<AppColors>()!.textMuted,
       fontWeight: FontWeight.w600, letterSpacing: 0.5,
     ));
 
-  Widget _tile(BuildContext context, {
+  Widget _tile(BuildContext context, AppL10n l, {
     required IconData icon, required Color color,
     required String title, required String subtitle,
     required VoidCallback onTap,
@@ -139,10 +141,7 @@ class SettingsScreen extends ConsumerWidget {
     child: Row(children: [
       Container(
         width: 40, height: 40,
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.12),
-          borderRadius: BorderRadius.circular(10),
-        ),
+        decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
         child: Icon(icon, color: color, size: 20),
       ),
       const SizedBox(width: 12),
@@ -158,43 +157,39 @@ class SettingsScreen extends ConsumerWidget {
     ]),
   );
 
-  void _confirmReboot(BuildContext context, WidgetRef ref) async {
-    final ok = await showDialog<bool>(context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Reboot Router?'),
-        content: const Text('Router akan restart sekitar 30-60 detik.'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Batal')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.warning),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Reboot'),
-          ),
-        ],
-      ),
-    );
+  void _confirmReboot(BuildContext context, WidgetRef ref, AppL10n l) async {
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: Text(l.rebootConfirm),
+      content: Text(l.rebootMessage),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(l.btnCancel)),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.warning),
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(l.btnReboot),
+        ),
+      ],
+    ));
     if (ok == true) {
       await ref.read(sshServiceProvider).reboot();
       if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Perintah reboot dikirim')));
+        SnackBar(content: Text(l.rebootSent)));
     }
   }
 
-  void _confirmDisconnect(BuildContext context, WidgetRef ref) async {
-    final ok = await showDialog<bool>(context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('Disconnect?'),
-        content: const Text('Hapus semua konfigurasi router dari app?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Batal')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Disconnect'),
-          ),
-        ],
-      ),
-    );
+  void _confirmDisconnect(BuildContext context, WidgetRef ref, AppL10n l) async {
+    final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
+      title: Text(l.disconnectConfirm),
+      content: Text(l.disconnectMessage),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: Text(l.btnCancel)),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+          onPressed: () => Navigator.pop(context, true),
+          child: Text(l.btnDisconnect),
+        ),
+      ],
+    ));
     if (ok == true) {
       ref.read(routerStatusProvider.notifier).stopPolling();
       ref.read(devicesProvider.notifier).stopPolling();

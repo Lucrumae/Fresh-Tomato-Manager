@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
 import 'dashboard_screen.dart';
@@ -28,20 +29,20 @@ class _MainShellState extends ConsumerState<MainShell> {
     });
   }
 
-  static const _tabs = [
-    _Tab(Icons.dashboard_rounded,   'Dashboard'),
-    _Tab(Icons.devices_rounded,     'Devices'),
-    _Tab(Icons.show_chart_rounded,  'Bandwidth'),
-    _Tab(Icons.article_rounded,     'Logs'),
-    _Tab(Icons.terminal_rounded,    'Terminal'),
-    _Tab(Icons.settings_rounded,    'Settings'),
-  ];
-
   @override
   Widget build(BuildContext context) {
+    final l = AppL10n.of(context);
     final c = Theme.of(context).extension<AppColors>()!;
 
-    // Terminal gets its own full-screen treatment
+    final tabs = [
+      (Icons.dashboard_rounded,   l.dashboard),
+      (Icons.devices_rounded,     l.devices),
+      (Icons.show_chart_rounded,  l.bandwidth),
+      (Icons.article_rounded,     l.logs),
+      (Icons.terminal_rounded,    l.terminal),
+      (Icons.settings_rounded,    l.settings),
+    ];
+
     if (_index == 4) {
       return WillPopScope(
         onWillPop: () async { setState(() => _index = 0); return false; },
@@ -52,14 +53,12 @@ class _MainShellState extends ConsumerState<MainShell> {
     final screens = [
       const DashboardScreen(), const DevicesScreen(),
       const BandwidthScreen(), const LogsScreen(),
-      const SizedBox(), // placeholder for terminal (handled above)
       const SettingsScreen(),
     ];
+    final displayIndex = _index > 4 ? _index - 1 : _index;
 
     return Scaffold(
-      body: IndexedStack(index: _index < 4 ? _index : 5, children: [
-        screens[0], screens[1], screens[2], screens[3], screens[5],
-      ]),
+      body: IndexedStack(index: displayIndex, children: screens),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: c.surface,
@@ -70,9 +69,12 @@ class _MainShellState extends ConsumerState<MainShell> {
           child: SizedBox(
             height: 60,
             child: Row(
-              children: List.generate(_tabs.length, (i) {
+              children: List.generate(tabs.length, (i) {
                 final sel = i == _index;
                 final isTerminal = i == 4;
+                final color = sel
+                  ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
+                  : c.textMuted;
                 return Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _index = i),
@@ -80,21 +82,13 @@ class _MainShellState extends ConsumerState<MainShell> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(_tabs[i].icon, size: 22,
-                          color: sel
-                            ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
-                            : c.textMuted,
-                        ),
+                        Icon(tabs[i].$1, size: 22, color: color),
                         const SizedBox(height: 3),
-                        Text(_tabs[i].label,
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
-                            color: sel
-                              ? (isTerminal ? AppTheme.terminal : AppTheme.primary)
-                              : c.textMuted,
-                          ),
-                        ),
+                        Text(tabs[i].$2, style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
+                          color: color,
+                        )),
                       ],
                     ),
                   ),
@@ -106,10 +100,4 @@ class _MainShellState extends ConsumerState<MainShell> {
       ),
     );
   }
-}
-
-class _Tab {
-  final IconData icon;
-  final String label;
-  const _Tab(this.icon, this.label);
 }

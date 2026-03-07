@@ -1,11 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'theme/app_theme.dart';
 import 'screens/setup_screen.dart';
 import 'screens/main_shell.dart';
 import 'services/app_state.dart';
 import 'services/notification_service.dart';
+
+export 'package:flutter_gen/gen_l10n/app_localizations.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -24,8 +28,8 @@ class TomatoManagerApp extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final config   = ref.watch(configProvider);
-    final isDark   = ref.watch(darkModeProvider);
+    final config = ref.watch(configProvider);
+    final isDark  = ref.watch(darkModeProvider);
 
     return MaterialApp(
       title: 'Tomato Manager',
@@ -33,6 +37,16 @@ class TomatoManagerApp extends ConsumerWidget {
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
       themeMode: isDark ? ThemeMode.dark : ThemeMode.light,
+      localizationsDelegates: const [
+        AppL10n.delegate,
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      supportedLocales: const [
+        Locale('en'),
+        Locale('id'),
+      ],
       home: config == null ? const SetupScreen() : const MainShell(),
     );
   }
