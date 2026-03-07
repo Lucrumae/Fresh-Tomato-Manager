@@ -48,6 +48,9 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   final List<String> _history = ['/'];
   int _histIdx = 0;
   final List<_Transfer> _transfers = [];
+  // Multi-select
+  final Set<String> _selected = {};
+  bool get _selectMode => _selected.isNotEmpty;
 
   @override void initState() { super.initState(); _ls('/'); }
 
@@ -426,9 +429,23 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       appBar: AppBar(
         backgroundColor: _bar,
         elevation: 0,
-        title: const Text('File Manager', style: TextStyle(fontSize: 16)),
-        actions: [
-          // Upload button
+        title: _selectMode
+          ? Text('\${_selected.length} selected', style: TextStyle(fontSize: 16, color: _accent))
+          : const Text('File Manager', style: TextStyle(fontSize: 16)),
+        leading: _selectMode
+          ? IconButton(
+              icon: const Icon(Icons.close_rounded),
+              onPressed: () => setState(() => _selected.clear()),
+            )
+          : null,
+        actions: _selectMode ? [
+          IconButton(
+            icon: const Icon(Icons.delete_outline_rounded),
+            color: AppTheme.danger,
+            tooltip: 'Delete selected',
+            onPressed: _deleteSelected,
+          ),
+        ] : [
           IconButton(
             icon: const Icon(Icons.upload_rounded),
             tooltip: 'Upload file',
@@ -489,17 +506,31 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   itemCount: _entries.length,
                   separatorBuilder: (_, __) => Divider(height:1, color:_brd, indent:52),
-                  itemBuilder: (ctx, i) => _EntryRow(
-                    entry: _entries[i],
-                    isDark: _isDark,
-                    fmtSize: _fmtSize,
-                    onTap: () => _entries[i].isDir
-                      ? _navigate(_entries[i].path)
-                      : _showContent(_entries[i]),
-                    onDownload: _entries[i].isDir ? null : () => _download(_entries[i]),
-                    onDelete: () => _delete(_entries[i]),
-                    onRename: () => _rename(_entries[i]),
-                  ),
+                  itemBuilder: (ctx, i) {
+                    final e = _entries[i];
+                    final isSelected = _selected.contains(e.path);
+                    return _EntryRow(
+                      entry: e,
+                      isDark: _isDark,
+                      isSelected: isSelected,
+                      selectMode: _selectMode,
+                      onTap: _selectMode
+                        ? () => setState(() {
+                            if (isSelected) _selected.remove(e.path);
+                            else _selected.add(e.path);
+                          })
+                        : () => e.isDir ? _navigate(e.path) : _showContent(e),
+                      onLongPress: () => setState(() {
+                        if (!_selectMode) _selected.add(e.path);
+                        else if (isSelected) _selected.remove(e.path);
+                        else _selected.add(e.path);
+                      }),
+                      onDownload: e.isDir ? null : () => _download(e),
+                      onDelete: () => _delete(e),
+                      onRename: () => _rename(e),
+                      onChmod: () => _chmod(e),
+                    );
+                  },
                 ),
 
         // Transfer progress cards
@@ -530,6 +561,93 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   void _goBack()  { _histIdx--; _ls(_history[_histIdx]); }
   void _goFwd()   { _histIdx++; _ls(_history[_histIdx]); }
+  // ── Chmod ─────────────────────────────────────────────────────────────────
+  Future<void> _chmod(_FsEntry entry) async {
+    // Parse current octal from permissions string e.g. "drwxr-xr-x"
+    String _toOctal(String p) {
+      final chars = p.length >= 10 ? p.substring(1) : p;
+      int octal = 0;
+      const map = {'r':4,'w':2,'x':1,'-':0};
+      for (int g=0; g<3; g++) {
+        int v=0;
+        for (int b=0; b<3; b++) {
+          final ch = chars.length > g*3+b ? chars[g*3+b] : '-';
+          v += map[ch] ?? 0;
+        }
+        octal = octal * 10 + v;
+      }
+      return octal.toString().padLeft(3,'0');
+    }
+
+    final current = _toOctal(entry.permissions);
+    final ctrl = TextEditingController(text: current);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Change Permissions'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('${entry.name}', style: const TextStyle(fontSize: 13)),
+          const SizedBox(height: 12),
+          TextField(
+            controller: ctrl,
+            decoration: const InputDecoration(
+              labelText: 'Octal permission (e.g. 755)',
+              hintText: '755',
+            ),
+            keyboardType: TextInputType.number,
+            maxLength: 4,
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Apply')),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null || result.isEmpty) return;
+    try {
+      await _run('chmod $result "${entry.path}"');
+      _ls(_cwd);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('chmod failed: $e')));
+    }
+  }
+
+  // ── Delete multiple selected ───────────────────────────────────────────────
+  Future<void> _deleteSelected() async {
+    if (_selected.isEmpty) return;
+    final count = _selected.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete Selected'),
+        content: Text('Delete $count item(s)? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete')),
+        ],
+      ),
+    ) ?? false;
+    if (!ok) return;
+    try {
+      for (final path in _selected) {
+        await _run('rm -rf "$path"');
+      }
+      setState(() => _selected.clear());
+      _ls(_cwd);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Delete failed: $e')));
+    }
+  }
+
   void _goUp()    {
     final parts = _cwd.split('/');
     parts.removeLast();
@@ -574,32 +692,52 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 // ── Entry Row ─────────────────────────────────────────────────────────────────
 class _EntryRow extends StatelessWidget {
   final _FsEntry entry;
-  final bool isDark;
+  final bool isDark, isSelected, selectMode;
   final String Function(int) fmtSize;
-  final VoidCallback onTap, onDelete, onRename;
-  final VoidCallback? onDownload;
+  final VoidCallback onTap, onDelete, onRename, onChmod;
+  final VoidCallback? onDownload, onLongPress;
 
   const _EntryRow({
     required this.entry, required this.isDark, required this.fmtSize,
     required this.onTap, required this.onDelete, required this.onRename,
-    this.onDownload,
+    required this.onChmod,
+    this.onDownload, this.onLongPress,
+    this.isSelected = false, this.selectMode = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final tileBg = isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF8FAFC);
+    final selBg  = isDark ? const Color(0xFF0F2030) : const Color(0xFFE8F4FF);
     final nameCol = isDark ? const Color(0xFFE2E8F5) : const Color(0xFF1A202C);
     final subCol  = isDark ? const Color(0xFF6B7A99) : const Color(0xFF718096);
     final _accent = Theme.of(context).extension<AppColors>()?.accent ?? const Color(0xFF00E5A0);
 
     return Material(
-      color: tileBg,
+      color: isSelected ? selBg : tileBg,
       child: InkWell(
         onTap: onTap,
+        onLongPress: onLongPress,
         splashColor: _accent.withOpacity(0.08),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal:12, vertical:9),
           child: Row(children: [
+            // Checkbox (select mode) or folder icon
+            if (selectMode)
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 150),
+                width: 24, height: 24,
+                margin: const EdgeInsets.only(right: 10),
+                decoration: BoxDecoration(
+                  color: isSelected ? _accent : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(
+                    color: isSelected ? _accent : subCol, width: 2),
+                ),
+                child: isSelected
+                  ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
+                  : null,
+              ),
             // Icon
             Container(
               width: 36, height: 36,
@@ -638,45 +776,52 @@ class _EntryRow extends StatelessWidget {
                 ]),
               ],
             )),
-            // Download button (files only)
-            if (onDownload != null)
-              IconButton(
-                icon: Icon(Icons.download_rounded,
-                  color: AppTheme.primary.withOpacity(0.7), size: 20),
-                tooltip: 'Download',
-                onPressed: onDownload,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 32),
-              ),
-            // More menu
-            PopupMenuButton<String>(
-              icon: Icon(Icons.more_vert_rounded, color: Colors.white38, size: 18),
-              color: isDark ? const Color(0xFF0F1622) : const Color(0xFFE8EDF5),
-              onSelected: (v) {
-                if (v=='download' && onDownload!=null) onDownload!();
-                if (v=='rename') onRename();
-                if (v=='delete') onDelete();
-              },
-              itemBuilder: (_) => [
-                if (!entry.isDir)
-                  PopupMenuItem(value:'download',
+            if (!selectMode) ...[
+              // Download button (files only)
+              if (onDownload != null)
+                IconButton(
+                  icon: Icon(Icons.download_rounded, color: _accent.withOpacity(0.7), size: 20),
+                  tooltip: 'Download',
+                  onPressed: onDownload,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 32),
+                ),
+              // More menu
+              PopupMenuButton<String>(
+                icon: Icon(Icons.more_vert_rounded, color: Colors.white38, size: 18),
+                color: isDark ? const Color(0xFF0F1622) : const Color(0xFFE8EDF5),
+                onSelected: (v) {
+                  if (v=='download' && onDownload!=null) onDownload!();
+                  if (v=='rename') onRename();
+                  if (v=='chmod') onChmod();
+                  if (v=='delete') onDelete();
+                },
+                itemBuilder: (_) => [
+                  if (!entry.isDir)
+                    PopupMenuItem(value:'download',
+                      child: Row(children:[
+                        Icon(Icons.download_rounded, size:16, color:_accent),
+                        const SizedBox(width:8), const Text('Download'),
+                      ])),
+                  const PopupMenuItem(value:'rename',
                     child: Row(children:[
-                      Icon(Icons.download_rounded, size:16, color:_accent),
-                      SizedBox(width:8), Text('Download'),
+                      Icon(Icons.drive_file_rename_outline, size:16, color:Colors.white54),
+                      SizedBox(width:8), Text('Rename'),
                     ])),
-                const PopupMenuItem(value:'rename',
-                  child: Row(children:[
-                    Icon(Icons.drive_file_rename_outline, size:16, color:Colors.white54),
-                    SizedBox(width:8), Text('Rename'),
-                  ])),
-                const PopupMenuItem(value:'delete',
-                  child: Row(children:[
-                    Icon(Icons.delete_outline_rounded, size:16, color:AppTheme.danger),
-                    SizedBox(width:8), Text('Delete',
-                      style:TextStyle(color:AppTheme.danger)),
-                  ])),
-              ],
-            ),
+                  PopupMenuItem(value:'chmod',
+                    child: Row(children:[
+                      Icon(Icons.lock_outline_rounded, size:16, color:_accent),
+                      const SizedBox(width:8), const Text('Permissions (chmod)'),
+                    ])),
+                  const PopupMenuItem(value:'delete',
+                    child: Row(children:[
+                      Icon(Icons.delete_outline_rounded, size:16, color:AppTheme.danger),
+                      SizedBox(width:8), Text('Delete',
+                        style:TextStyle(color:AppTheme.danger)),
+                    ])),
+                ],
+              ),
+            ],
           ]),
         ),
       ),

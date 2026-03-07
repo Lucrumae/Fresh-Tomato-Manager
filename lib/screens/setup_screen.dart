@@ -142,6 +142,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final l = AppL10n.of(context);
     final isDark = ref.watch(darkModeProvider);
     final c = Theme.of(context).extension<AppColors>()!;
+    final accent = c.accent;
 
     return Padding(
       padding: const EdgeInsets.all(32),
@@ -229,6 +230,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
     final l = AppL10n.of(context);
     final isDark = ref.watch(darkModeProvider);
     final c = Theme.of(context).extension<AppColors>()!;
+    final accent = c.accent;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(24),
@@ -317,7 +319,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 color: c.cardBg,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: _rememberMe ? AppTheme.primary : c.border,
+                  color: _rememberMe ? accent : c.border,
                   width: _rememberMe ? 1.5 : 1,
                 ),
               ),
@@ -326,10 +328,10 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                   duration: const Duration(milliseconds: 200),
                   width: 22, height: 22,
                   decoration: BoxDecoration(
-                    color: _rememberMe ? AppTheme.primary : Colors.transparent,
+                    color: _rememberMe ? accent : Colors.transparent,
                     borderRadius: BorderRadius.circular(6),
                     border: Border.all(
-                      color: _rememberMe ? AppTheme.primary : c.border,
+                      color: _rememberMe ? accent : c.border,
                       width: 2,
                     ),
                   ),
@@ -357,23 +359,23 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: AppTheme.primaryLight.withOpacity(isDark ? 0.15 : 1),
+              color: accent.withOpacity(isDark ? 0.1 : 0.08),
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
+              border: Border.all(color: accent.withOpacity(0.25)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(children: [
-                  const Icon(Icons.info_rounded, color: AppTheme.primary, size: 16),
+                  Icon(Icons.info_rounded, color: accent, size: 16),
                   const SizedBox(width: 8),
-                  Text(l.tipsTitle, style: const TextStyle(
-                    color: AppTheme.primary, fontWeight: FontWeight.w600, fontSize: 13)),
+                  Text(l.tipsTitle, style: TextStyle(
+                    color: accent, fontWeight: FontWeight.w600, fontSize: 13)),
                 ]),
                 const SizedBox(height: 8),
                 Text(l.tipsContent,
                   style: TextStyle(
-                    color: AppTheme.primary.withOpacity(0.8), fontSize: 13)),
+                    color: accent.withOpacity(0.8), fontSize: 13)),
               ],
             ),
           ),

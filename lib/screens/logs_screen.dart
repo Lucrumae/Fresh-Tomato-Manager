@@ -84,9 +84,9 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
-                  _Chip(label: 'All', value: 'all', current: _filter, onTap: (v) => setState(() => _filter = v)),
-                  _Chip(label: '🔴 Errors', value: 'error', current: _filter, onTap: (v) => setState(() => _filter = v)),
-                  _Chip(label: '🟡 Warnings', value: 'warn', current: _filter, onTap: (v) => setState(() => _filter = v)),
+                  _Chip(label: 'All', value: 'all', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: '🔴 Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: '🟡 Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
                 ]),
               ),
             ]),
@@ -177,19 +177,26 @@ class _Chip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final selected = value == current;
+    final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
+    final c2 = Theme.of(context).extension<AppColors>()!;
     return GestureDetector(
       onTap: () => onTap(value),
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppTheme.primary : AppTheme.surface,
+          color: selected ? accent.withOpacity(0.15) : c2.cardBg,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? AppTheme.primary : AppTheme.border),
+          border: Border.all(
+            color: selected ? accent : c2.border,
+            width: selected ? 1.5 : 1,
+          ),
         ),
         child: Text(label, style: TextStyle(
-          color: selected ? Colors.white : AppTheme.textSecondary,
-          fontSize: 13, fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+          fontSize: 12,
+          fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+          color: selected ? accent : c2.textSecondary,
         )),
       ),
     );

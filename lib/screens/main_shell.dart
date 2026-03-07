@@ -111,21 +111,19 @@ class _MainShellState extends ConsumerState<MainShell> {
           selectedIndex: _index,
           onDestinationSelected: (i) => setState(() => _index = i),
           backgroundColor: c.cardBg,
-          indicatorColor: AppTheme.primary.withOpacity(0.15),
+          indicatorColor: Theme.of(context).extension<AppColors>()!.accent.withOpacity(0.15),
           height: 62,
           labelBehavior: NavigationDestinationLabelBehavior.alwaysShow,
           destinations: tabDefs.map((t) {
             final isTerminal = t.$1 == Icons.terminal_rounded;
             return NavigationDestination(
-              icon: Icon(t.$1, size: 22,
-                color: isTerminal ? AppTheme.terminal.withOpacity(0.6) : null),
-              selectedIcon: Icon(t.$1, size: 22,
-                color: isTerminal ? AppTheme.terminal : AppTheme.primary),
+              icon: Icon(t.$1, size: 22),
+              selectedIcon: Icon(t.$1, size: 22),
               label: t.$2,
             );
           }).toList(),
         ),
       ),
-    );
+    ));
   }
 }

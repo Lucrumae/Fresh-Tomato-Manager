@@ -37,7 +37,7 @@ class BandwidthScreen extends ConsumerWidget {
           Row(children: [
             Expanded(child: _SpeedCard(
               label: 'Download', icon: Icons.arrow_downward_rounded,
-              value: _fmt(bw.currentRx), color: AppTheme.primary,
+              value: _fmt(bw.currentRx), color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
               peak: 'Peak: ${_fmt(bw.peakRx)}',
             )),
             const SizedBox(width: 12),
@@ -60,7 +60,7 @@ class BandwidthScreen extends ConsumerWidget {
                   children: [
                     Text('Real-Time', style: Theme.of(context).textTheme.titleSmall),
                     Row(children: [
-                      _Legend(color: AppTheme.primary, label: 'Down'),
+                      _Legend(color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary, label: 'Down'),
                       const SizedBox(width: 12),
                       _Legend(color: AppTheme.secondary, label: 'Up'),
                     ]),
@@ -85,7 +85,7 @@ class BandwidthScreen extends ConsumerWidget {
                     icon: Icons.arrow_downward_rounded,
                     label: 'Total Downloaded',
                     value: _fmtMB(bw.totalRxMB),
-                    color: AppTheme.primary,
+                    color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
                   )),
                   Expanded(child: _TotalStat(
                     icon: Icons.arrow_upward_rounded,
@@ -165,12 +165,12 @@ class _RealtimeChart extends StatelessWidget {
         LineChartBarData(
           spots: rxSpots,
           isCurved: true,
-          color: AppTheme.primary,
+          color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
           barWidth: 2,
           dotData: FlDotData(show: false),
           belowBarData: BarAreaData(
             show: true,
-            color: AppTheme.primary.withOpacity(0.08),
+            color: (Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary).withOpacity(0.08),
           ),
         ),
         LineChartBarData(
