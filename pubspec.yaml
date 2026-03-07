@@ -23,7 +23,7 @@ dependencies:
   flutter_secure_storage: ^9.0.0
 
   # Charts & graphs
-  fl_chart: ^0.68.0
+  fl_chart: ^0.66.2
 
   # Notifications
   flutter_local_notifications: ^17.1.2

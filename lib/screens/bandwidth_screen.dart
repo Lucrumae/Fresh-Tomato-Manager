@@ -160,17 +160,7 @@ class _RealtimeChart extends StatelessWidget {
         topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
         rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
       ),
-      lineTouchData: LineTouchData(
-        touchTooltipData: LineTouchTooltipData(
-          tooltipColor: AppTheme.textPrimary.withOpacity(0.8),
-          getTooltipItems: (spots) => spots.map((s) => LineTooltipItem(
-            s.y >= 1024
-              ? '${(s.y/1024).toStringAsFixed(2)} Mbps'
-              : '${s.y.toStringAsFixed(0)} Kbps',
-            const TextStyle(color: Colors.white, fontSize: 11),
-          )).toList(),
-        ),
-      ),
+      lineTouchData: const LineTouchData(enabled: false),
       lineBarsData: [
         LineChartBarData(
           spots: rxSpots,
