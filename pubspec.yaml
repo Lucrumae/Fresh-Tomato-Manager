@@ -10,8 +10,8 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # HTTP & networking
-  dio: ^5.4.0
+  # SSH
+  dartssh2: ^2.9.0
 
   # State management
   flutter_riverpod: ^2.5.1
@@ -27,7 +27,7 @@ dependencies:
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
 
-  # Network info - pin ke versi 4.x yang pakai single ConnectivityResult
+  # Network info
   connectivity_plus: ^4.0.2
 
   # Utils

@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
-import '../services/router_api.dart';
 import 'dashboard_screen.dart';
 import 'devices_screen.dart';
 import 'bandwidth_screen.dart';
@@ -21,36 +20,24 @@ class _MainShellState extends ConsumerState<MainShell> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _init());
-  }
-
-  Future<void> _init() async {
-    final config = ref.read(configProvider);
-    if (config == null) return;
-
-    final api = ref.read(apiServiceProvider);
-    api.configure(config);
-
-    // Start all polling
-    ref.read(routerStatusProvider.notifier).startPolling();
-    ref.read(devicesProvider.notifier).startPolling();
-    ref.read(bandwidthProvider.notifier).startPolling();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(routerStatusProvider.notifier).startPolling();
+      ref.read(devicesProvider.notifier).startPolling();
+      ref.read(bandwidthProvider.notifier).startPolling();
+    });
   }
 
   static const _tabs = [
-    _TabItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-    _TabItem(icon: Icons.devices_rounded, label: 'Devices'),
-    _TabItem(icon: Icons.show_chart_rounded, label: 'Bandwidth'),
-    _TabItem(icon: Icons.article_rounded, label: 'Logs'),
-    _TabItem(icon: Icons.settings_rounded, label: 'Settings'),
+    _Tab(Icons.dashboard_rounded, 'Dashboard'),
+    _Tab(Icons.devices_rounded, 'Devices'),
+    _Tab(Icons.show_chart_rounded, 'Bandwidth'),
+    _Tab(Icons.article_rounded, 'Logs'),
+    _Tab(Icons.settings_rounded, 'Settings'),
   ];
 
   final _screens = const [
-    DashboardScreen(),
-    DevicesScreen(),
-    BandwidthScreen(),
-    LogsScreen(),
-    SettingsScreen(),
+    DashboardScreen(), DevicesScreen(), BandwidthScreen(),
+    LogsScreen(), SettingsScreen(),
   ];
 
   @override
@@ -68,8 +55,7 @@ class _MainShellState extends ConsumerState<MainShell> {
             height: 60,
             child: Row(
               children: List.generate(_tabs.length, (i) {
-                final selected = i == _index;
-                final tab = _tabs[i];
+                final sel = i == _index;
                 return Expanded(
                   child: GestureDetector(
                     onTap: () => setState(() => _index = i),
@@ -77,18 +63,15 @@ class _MainShellState extends ConsumerState<MainShell> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(tab.icon,
-                          size: 22,
-                          color: selected ? AppTheme.primary : AppTheme.textMuted,
-                        ),
+                        Icon(_tabs[i].icon, size: 22,
+                          color: sel ? AppTheme.primary : AppTheme.textMuted),
                         const SizedBox(height: 3),
-                        Text(tab.label,
+                        Text(_tabs[i].label,
                           style: TextStyle(
                             fontSize: 10,
-                            fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
-                            color: selected ? AppTheme.primary : AppTheme.textMuted,
-                          ),
-                        ),
+                            fontWeight: sel ? FontWeight.w600 : FontWeight.w400,
+                            color: sel ? AppTheme.primary : AppTheme.textMuted,
+                          )),
                       ],
                     ),
                   ),
@@ -102,8 +85,8 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 }
 
-class _TabItem {
+class _Tab {
   final IconData icon;
   final String label;
-  const _TabItem({required this.icon, required this.label});
+  const _Tab(this.icon, this.label);
 }

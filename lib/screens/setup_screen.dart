@@ -4,7 +4,6 @@ import 'package:flutter_animate/flutter_animate.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
 import '../services/app_state.dart';
-import '../services/router_api.dart';
 import 'main_shell.dart';
 
 class SetupScreen extends ConsumerStatefulWidget {
@@ -14,59 +13,49 @@ class SetupScreen extends ConsumerStatefulWidget {
 }
 
 class _SetupScreenState extends ConsumerState<SetupScreen> {
-  final _hostCtrl = TextEditingController(text: '192.168.1.1');
-  final _userCtrl = TextEditingController(text: 'admin');
-  final _passCtrl = TextEditingController();
-  final _portCtrl = TextEditingController(text: '80');
+  final _hostCtrl    = TextEditingController(text: '192.168.1.1');
+  final _userCtrl    = TextEditingController(text: 'root');
+  final _passCtrl    = TextEditingController();
+  final _portCtrl    = TextEditingController(text: '22');
   bool _obscure = true;
-  bool _testing = false;
+  bool _connecting = false;
   String? _error;
-  int _step = 0; // 0=welcome, 1=form
+  int _step = 0;
 
   @override
   void dispose() {
-    _hostCtrl.dispose();
-    _userCtrl.dispose();
-    _passCtrl.dispose();
-    _portCtrl.dispose();
+    _hostCtrl.dispose(); _userCtrl.dispose();
+    _passCtrl.dispose(); _portCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _connect() async {
-    setState(() { _testing = true; _error = null; });
+    if (_hostCtrl.text.trim().isEmpty || _passCtrl.text.isEmpty) {
+      setState(() => _error = 'Isi semua field terlebih dahulu');
+      return;
+    }
+
+    setState(() { _connecting = true; _error = null; });
 
     final config = TomatoConfig(
       host: _hostCtrl.text.trim(),
       username: _userCtrl.text.trim(),
       password: _passCtrl.text,
-      port: int.tryParse(_portCtrl.text) ?? 80,
+      sshPort: int.tryParse(_portCtrl.text.trim()) ?? 22,
     );
 
-    final api = ref.read(apiServiceProvider);
-    api.configure(config);
-
-    String? errorMsg;
-    try {
-      errorMsg = await api.testConnection().timeout(
-        const Duration(seconds: 12),
-        onTimeout: () => 'Timeout setelah 12 detik. Pastikan IP benar dan HP terhubung ke WiFi router.',
-      );
-    } catch (e) {
-      errorMsg = e.toString().replaceAll('Exception: ', '');
-    }
+    final ssh = ref.read(sshServiceProvider);
+    final error = await ssh.connect(config);
 
     if (!mounted) return;
 
-    if (errorMsg == null) {
+    if (error == null) {
       await ref.read(configProvider.notifier).save(config);
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const MainShell()),
       );
     } else {
-      setState(() {
-        _error = errorMsg;
-        _testing = false;
-      });
+      setState(() { _error = error; _connecting = false; });
     }
   }
 
@@ -87,7 +76,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Spacer(),
-          // Logo / icon
           Container(
             width: 72, height: 72,
             decoration: BoxDecoration(
@@ -102,25 +90,22 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           ).animate(delay: 100.ms).fadeIn().slideY(begin: 0.2),
           const SizedBox(height: 16),
           Text(
-            'Monitor and manage your FreshTomato router from anywhere.',
+            'Kelola FreshTomato router dari mana saja via SSH.',
             style: Theme.of(context).textTheme.bodyLarge?.copyWith(color: AppTheme.textSecondary),
           ).animate(delay: 200.ms).fadeIn(),
           const Spacer(),
-          // Feature pills
           Wrap(spacing: 8, runSpacing: 8, children: [
-            _pill('📊 Dashboard'),
-            _pill('📱 Devices'),
-            _pill('📈 Bandwidth'),
-            _pill('🔔 Notifications'),
-            _pill('🔒 Block devices'),
-            _pill('🌐 VPN support'),
+            _pill('📊 Dashboard'), _pill('📱 Devices'),
+            _pill('📈 Bandwidth'), _pill('🚫 Block devices'),
+            _pill('⚡ QoS'), _pill('🔌 Port Forward'),
+            _pill('📋 Logs'), _pill('🔐 SSH'),
           ]).animate(delay: 300.ms).fadeIn(),
           const SizedBox(height: 40),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () => setState(() => _step = 1),
-              child: const Text('Get Started'),
+              child: const Text('Mulai'),
             ),
           ).animate(delay: 400.ms).fadeIn().slideY(begin: 0.2),
           const SizedBox(height: 16),
@@ -132,8 +117,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   Widget _pill(String label) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
     decoration: BoxDecoration(
-      color: AppTheme.cardBg,
-      borderRadius: BorderRadius.circular(20),
+      color: AppTheme.cardBg, borderRadius: BorderRadius.circular(20),
       border: Border.all(color: AppTheme.border),
     ),
     child: Text(label, style: const TextStyle(fontSize: 13)),
@@ -151,13 +135,12 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             child: const Icon(Icons.arrow_back_rounded, color: AppTheme.textPrimary),
           ),
           const SizedBox(height: 32),
-          Text('Connect Router', style: Theme.of(context).textTheme.displayMedium),
+          Text('Connect via SSH', style: Theme.of(context).textTheme.displayMedium),
           const SizedBox(height: 8),
-          Text('Enter your router\'s address and credentials',
+          Text('Pastikan SSH aktif di router: Administration → Admin Access → SSH',
             style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 32),
 
-          // Router IP
           _label('Router IP Address'),
           const SizedBox(height: 8),
           TextField(
@@ -170,39 +153,36 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Port
-          _label('Port'),
+          _label('SSH Port'),
           const SizedBox(height: 8),
           TextField(
             controller: _portCtrl,
             keyboardType: TextInputType.number,
             decoration: const InputDecoration(
-              hintText: '80',
-              prefixIcon: Icon(Icons.lan_rounded, size: 20),
+              hintText: '22',
+              prefixIcon: Icon(Icons.terminal_rounded, size: 20),
             ),
           ),
           const SizedBox(height: 16),
 
-          // Username
           _label('Username'),
           const SizedBox(height: 8),
           TextField(
             controller: _userCtrl,
             decoration: const InputDecoration(
-              hintText: 'admin',
+              hintText: 'root',
               prefixIcon: Icon(Icons.person_rounded, size: 20),
             ),
           ),
           const SizedBox(height: 16),
 
-          // Password
           _label('Password'),
           const SizedBox(height: 8),
           TextField(
             controller: _passCtrl,
             obscureText: _obscure,
             decoration: InputDecoration(
-              hintText: 'Enter password',
+              hintText: 'SSH password',
               prefixIcon: const Icon(Icons.lock_rounded, size: 20),
               suffixIcon: GestureDetector(
                 onTap: () => setState(() => _obscure = !_obscure),
@@ -220,14 +200,20 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               borderRadius: BorderRadius.circular(12),
               border: Border.all(color: AppTheme.primary.withOpacity(0.2)),
             ),
-            child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.info_rounded, color: AppTheme.primary, size: 18),
-                const SizedBox(width: 10),
-                Expanded(child: Text(
-                  'When outside your home network, connect via VPN first, then use your router\'s LAN IP.',
+                Row(children: [
+                  const Icon(Icons.info_rounded, color: AppTheme.primary, size: 16),
+                  const SizedBox(width: 8),
+                  Text('Tips', style: TextStyle(color: AppTheme.primary, fontWeight: FontWeight.w600, fontSize: 13)),
+                ]),
+                const SizedBox(height: 8),
+                Text('• Username FreshTomato biasanya: root\n'
+                     '• Password = password admin router\n'
+                     '• Dari luar jaringan: aktifkan VPN dulu',
                   style: Theme.of(context).textTheme.bodySmall?.copyWith(color: AppTheme.primary),
-                )),
+                ),
               ],
             ),
           ),
@@ -242,6 +228,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 border: Border.all(color: AppTheme.danger.withOpacity(0.2)),
               ),
               child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const Icon(Icons.error_rounded, color: AppTheme.danger, size: 18),
                   const SizedBox(width: 10),
@@ -257,19 +244,22 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
-              onPressed: _testing ? null : _connect,
-              child: _testing
-                ? const SizedBox(height: 20, width: 20,
-                    child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+              onPressed: _connecting ? null : _connect,
+              child: _connecting
+                ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    const SizedBox(height: 18, width: 18,
+                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                    const SizedBox(width: 12),
+                    const Text('Connecting via SSH...'),
+                  ])
                 : const Text('Connect'),
             ),
           ),
+          const SizedBox(height: 32),
         ],
       ),
     );
   }
 
-  Widget _label(String text) => Text(text,
-    style: Theme.of(context).textTheme.labelLarge,
-  );
+  Widget _label(String text) => Text(text, style: Theme.of(context).textTheme.labelLarge);
 }
