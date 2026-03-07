@@ -49,8 +49,7 @@ final connectionStateProvider = StateProvider<ConnectionState>(
 
 // ── Network type (wifi vs mobile/vpn) ─────────────────────────────────────────
 final networkTypeProvider = StreamProvider<ConnectivityResult>((ref) {
-  return Connectivity().onConnectivityChanged.map((list) =>
-    list.isNotEmpty ? list.first : ConnectivityResult.none);
+  return Connectivity().onConnectivityChanged;
 });
 
 // ── Router status ──────────────────────────────────────────────────────────────

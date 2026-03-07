@@ -23,15 +23,12 @@ dependencies:
   # Charts & graphs
   fl_chart: ^0.66.2
 
-  # Notifications (pin versi stabil)
-  flutter_local_notifications: ^16.3.3
-
   # UI components
   google_fonts: ^6.2.1
   flutter_animate: ^4.5.0
 
-  # Network info (pin versi yang API-nya stabil)
-  connectivity_plus: ^5.0.2
+  # Network info - pin ke versi 4.x yang pakai single ConnectivityResult
+  connectivity_plus: ^4.0.2
 
   # Utils
   intl: ^0.19.0
