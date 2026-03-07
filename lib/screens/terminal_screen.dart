@@ -83,27 +83,19 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
   final _lines  = <_Line>[];
   SSHSession? _sess;
   bool _conn=false, _loading=false;
+  bool _isDark=true; // updated each build
   StreamSubscription? _s1, _s2;
   String _buf='';
   final _hist=<String>[];
   int _hi=-1;
   bool _kb=false;
 
-  // Always-dark terminal colors — tidak terpengaruh theme
-  static const _bg  = Color(0xFF0B0F1A);
-  static const _bar = Color(0xFF0F1622);
-  static const _brd = Color(0xFF1A2535);
+  // Colors ditentukan saat build berdasarkan theme
 
   @override void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _focus.addListener((){if(mounted)setState((){});});
-    // Auto-show keyboard when terminal tab is opened
-    WidgetsBinding.instance.addPostFrameCallback((_){
-      Future.delayed(const Duration(milliseconds:300), (){
-        if(mounted) _focus.requestFocus();
-      });
-    });
     _start();
   }
 
@@ -204,14 +196,22 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    // Colors mengikuti tema yang dipilih
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    _isDark = isDark;
+    final bg  = isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF0F4F8);
+    final bar = isDark ? const Color(0xFF0F1622) : const Color(0xFFE2E8F0);
+    final brd = isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
+    final textColor = isDark ? const Color(0xFFCDD6F4) : const Color(0xFF1A202C);
+
     return Container(
-      color: _bg,
+      color: bg,
       child: Column(children:[
 
         // ── TOP BAR: Reconnect button ──────────────────────────────────────
         Container(
           padding: const EdgeInsets.symmetric(horizontal:12, vertical:6),
-          color: _bar,
+          color: bar,
           child: Row(children:[
             Container(width:8, height:8, decoration:BoxDecoration(
               color:_conn?AppTheme.terminal:Colors.redAccent,
@@ -255,7 +255,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
               else _focus.requestFocus();
             },
             child: Container(
-              color:_bg, width:double.infinity,
+              color:bg, width:double.infinity,
               child:_loading
                 ? Center(child:Column(mainAxisSize:MainAxisSize.min, children:[
                     const SizedBox(width:18,height:18,
@@ -279,7 +279,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
           // Row 1 (atas): quick commands — top, free, df, dll
           Container(
             height:36,
-            color:_bar,
+            color:bar,
             child:ListView(
               scrollDirection:Axis.horizontal,
               padding:const EdgeInsets.symmetric(horizontal:6,vertical:5),
@@ -331,7 +331,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
                   enabledBorder:InputBorder.none,focusedBorder:InputBorder.none,
                   filled:false,contentPadding:EdgeInsets.symmetric(vertical:8),
                   hintText:'command...',
-                  hintStyle:TextStyle(color:Color(0xFF2E3F55),fontSize:13)),
+                  hintStyle:TextStyle(color:isDark?const Color(0xFF2E3F55):const Color(0xFF8A9AB5),fontSize:13)),
                 onSubmitted:_send, textInputAction:TextInputAction.send,
               )),
               GestureDetector(
@@ -346,8 +346,8 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
         if (!_kb)
           Container(
             height:36,
-            decoration:BoxDecoration(color:_bar,
-              border:Border(top:BorderSide(color:_brd))),
+            decoration:BoxDecoration(color:bar,
+              border:Border(top:BorderSide(color:brd))),
             child:Row(children:[
               GestureDetector(
                 onTap:()=>_focus.requestFocus(),
@@ -391,7 +391,7 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
       text:s.text,
       style:GoogleFonts.jetBrainsMono(
         fontSize:12, height:1.4,
-        color:s.fg??const Color(0xFFCDD6F4),
+        color:s.fg??(_isDark?const Color(0xFFCDD6F4):const Color(0xFF1A202C)),
         backgroundColor:s.bg,
         fontWeight:s.bold?FontWeight.bold:FontWeight.normal),
     )).toList()));
@@ -418,6 +418,10 @@ class _TS extends ConsumerState<TerminalScreen> with WidgetsBindingObserver {
       child:Text(label,style:GoogleFonts.jetBrainsMono(
         color:col??AppTheme.terminal,fontSize:11,fontWeight:FontWeight.w500))));
 
-  Widget _sep() => Container(width:1,color:_brd,
-    margin:const EdgeInsets.symmetric(horizontal:4,vertical:5));
+  Widget _sep() {
+    final isDark = _isDark;
+    final brd = isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
+    return Container(width:1, color:brd,
+      margin:const EdgeInsets.symmetric(horizontal:4,vertical:5));
+  }
 }

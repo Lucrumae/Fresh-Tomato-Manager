@@ -6,87 +6,73 @@ on:
   workflow_dispatch:
 
 jobs:
-
   build-android:
     name: Build Android APK
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: stable
           cache: true
 
-      - name: Create Flutter scaffold & copy sources
+      - name: Scaffold + copy sources
         run: |
           flutter create --org com.tomatomanager --project-name tomato_manager /tmp/scaffold
           rm -rf /tmp/scaffold/lib
           cp -r lib /tmp/scaffold/lib
           cp pubspec.yaml /tmp/scaffold/pubspec.yaml
-          # Copy Android customizations
-          cp android/app/src/main/AndroidManifest.xml /tmp/scaffold/android/app/src/main/AndroidManifest.xml
+          # Android customizations
+          cp android/app/src/main/AndroidManifest.xml \
+             /tmp/scaffold/android/app/src/main/AndroidManifest.xml
           mkdir -p /tmp/scaffold/android/app/src/main/res/xml
-          cp android/app/src/main/res/xml/network_security_config.xml /tmp/scaffold/android/app/src/main/res/xml/
+          cp android/app/src/main/res/xml/network_security_config.xml \
+             /tmp/scaffold/android/app/src/main/res/xml/
+          cp android/app/src/main/res/xml/file_paths.xml \
+             /tmp/scaffold/android/app/src/main/res/xml/
 
-      - name: Install dependencies
+      - run: flutter pub get
         working-directory: /tmp/scaffold
-        run: flutter pub get
 
       - name: Build APK
         working-directory: /tmp/scaffold
         run: flutter build apk --release
 
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: tomato-manager-android
           path: /tmp/scaffold/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
 
   build-ios:
-    name: Build iOS IPA
+    name: Build iOS
     runs-on: macos-latest
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.0'
           channel: stable
           cache: true
 
-      - name: Create Flutter scaffold & copy sources
+      - name: Scaffold + copy sources
         run: |
           flutter create --org com.tomatomanager --project-name tomato_manager /tmp/scaffold
           rm -rf /tmp/scaffold/lib
           cp -r lib /tmp/scaffold/lib
           cp pubspec.yaml /tmp/scaffold/pubspec.yaml
 
-      - name: Install dependencies
+      - run: flutter pub get
         working-directory: /tmp/scaffold
-        run: flutter pub get
-
-      - name: Install CocoaPods
+      - run: pod install --repo-update
         working-directory: /tmp/scaffold/ios
-        run: pod install --repo-update
-
-      - name: Build iOS simulator
+      - run: flutter build ios --simulator
         working-directory: /tmp/scaffold
-        run: flutter build ios --simulator
 
       - name: Create IPA
         run: |
@@ -94,8 +80,7 @@ jobs:
           cp -r /tmp/scaffold/build/ios/iphonesimulator/Runner.app /tmp/ipa/Payload/
           cd /tmp/ipa && zip -r TomatoManager.ipa Payload/
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: tomato-manager-ios
           path: /tmp/ipa/TomatoManager.ipa

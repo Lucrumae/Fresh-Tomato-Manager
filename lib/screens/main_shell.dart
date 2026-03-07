@@ -48,6 +48,8 @@ class _MainShellState extends ConsumerState<MainShell>
     if (state == AppLifecycleState.resumed) _checkReconnect();
   }
 
+  int _reconnectAttempts = 0;
+
   Future<void> _checkReconnect() async {
     await Future.delayed(const Duration(milliseconds: 600));
     if (!mounted) return;
@@ -58,13 +60,60 @@ class _MainShellState extends ConsumerState<MainShell>
       if (config != null) {
         final err = await ssh.connect(config);
         if (err == null && mounted) {
+          _reconnectAttempts = 0;
           ref.read(routerStatusProvider.notifier).startPolling();
           ref.read(devicesProvider.notifier).startPolling();
           ref.read(bandwidthProvider.notifier).startPolling();
+        } else if (mounted) {
+          _reconnectAttempts++;
+          // After 3 failed attempts, offer to go back to login
+          if (_reconnectAttempts >= 3) {
+            setState(() => _isReconnecting = false);
+            _showReconnectFailedDialog();
+            return;
+          }
         }
       }
       if (mounted) setState(() => _isReconnecting = false);
     }
+  }
+
+  void _showReconnectFailedDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('Koneksi Terputus'),
+        content: const Text('Tidak dapat terhubung kembali ke router. Kembali ke halaman login?'),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() { _isReconnecting = false; _reconnectAttempts = 0; });
+            },
+            child: const Text('Coba Lagi'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () async {
+              Navigator.pop(context);
+              ref.read(routerStatusProvider.notifier).stopPolling();
+              ref.read(devicesProvider.notifier).stopPolling();
+              ref.read(bandwidthProvider.notifier).stopPolling();
+              await ref.read(sshServiceProvider).disconnect();
+              await ref.read(configProvider.notifier).clear();
+              if (context.mounted) {
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (_) => const SetupScreen()),
+                  (_) => false,
+                );
+              }
+            },
+            child: const Text('Ke Halaman Login'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

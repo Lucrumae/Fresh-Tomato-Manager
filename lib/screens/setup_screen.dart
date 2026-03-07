@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../models/models.dart';
@@ -18,16 +19,53 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
   final _userCtrl = TextEditingController(text: 'root');
   final _passCtrl = TextEditingController();
   final _portCtrl = TextEditingController(text: '22');
-  bool _obscure = true;
+  bool _obscure   = true;
   bool _connecting = false;
+  bool _rememberMe = false;
   String? _error;
   int _step = 0;
 
+  static const _kRemember = 'remember_me';
+  static const _kSavedHost = 'saved_host';
+  static const _kSavedUser = 'saved_user';
+  static const _kSavedPass = 'saved_pass';
+  static const _kSavedPort = 'saved_port';
+
   @override
-  void dispose() {
-    _hostCtrl.dispose(); _userCtrl.dispose();
-    _passCtrl.dispose(); _portCtrl.dispose();
-    super.dispose();
+  void initState() {
+    super.initState();
+    _loadSaved();
+  }
+
+  Future<void> _loadSaved() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remember = prefs.getBool(_kRemember) ?? false;
+    if (remember) {
+      setState(() {
+        _rememberMe = true;
+        _hostCtrl.text = prefs.getString(_kSavedHost) ?? '192.168.1.1';
+        _userCtrl.text = prefs.getString(_kSavedUser) ?? 'root';
+        _passCtrl.text = prefs.getString(_kSavedPass) ?? '';
+        _portCtrl.text = prefs.getString(_kSavedPort) ?? '22';
+      });
+    }
+  }
+
+  Future<void> _saveCredentials(TomatoConfig config) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_rememberMe) {
+      await prefs.setBool(_kRemember, true);
+      await prefs.setString(_kSavedHost, config.host);
+      await prefs.setString(_kSavedUser, config.username);
+      await prefs.setString(_kSavedPass, config.password);
+      await prefs.setString(_kSavedPort, config.sshPort.toString());
+    } else {
+      await prefs.setBool(_kRemember, false);
+      await prefs.remove(_kSavedHost);
+      await prefs.remove(_kSavedUser);
+      await prefs.remove(_kSavedPass);
+      await prefs.remove(_kSavedPort);
+    }
   }
 
   Future<void> _connect() async {
@@ -50,12 +88,20 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
     if (error == null) {
       await ref.read(configProvider.notifier).save(config);
+      await _saveCredentials(config);
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(builder: (_) => const MainShell()),
       );
     } else {
       setState(() { _error = error; _connecting = false; });
     }
+  }
+
+  @override
+  void dispose() {
+    _hostCtrl.dispose(); _userCtrl.dispose();
+    _passCtrl.dispose(); _portCtrl.dispose();
+    super.dispose();
   }
 
   @override
@@ -77,7 +123,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Dark mode toggle top right
           Align(
             alignment: Alignment.topRight,
             child: GestureDetector(
@@ -86,8 +131,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 duration: const Duration(milliseconds: 250),
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: c.cardBg,
-                  borderRadius: BorderRadius.circular(20),
+                  color: c.cardBg, borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: c.border),
                 ),
                 child: Row(mainAxisSize: MainAxisSize.min, children: [
@@ -108,7 +152,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               ),
             ),
           ),
-
           const Spacer(),
           Container(
             width: 72, height: 72,
@@ -119,19 +162,17 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
             child: const Icon(Icons.router_rounded, size: 36, color: AppTheme.primary),
           ).animate().fadeIn().slideY(begin: 0.2),
           const SizedBox(height: 24),
-          Text(l.appTitle,
-            style: Theme.of(context).textTheme.displayLarge,
-          ).animate(delay: 100.ms).fadeIn().slideY(begin: 0.2),
+          Text(l.appTitle, style: Theme.of(context).textTheme.displayLarge)
+            .animate(delay: 100.ms).fadeIn().slideY(begin: 0.2),
           const SizedBox(height: 12),
-          Text(l.appSubtitle,
-            style: Theme.of(context).textTheme.bodyLarge,
-          ).animate(delay: 200.ms).fadeIn(),
+          Text(l.appSubtitle, style: Theme.of(context).textTheme.bodyLarge)
+            .animate(delay: 200.ms).fadeIn(),
           const Spacer(),
           Wrap(spacing: 8, runSpacing: 8, children: [
             _pill('📊 ${l.dashboard}'), _pill('📱 ${l.devices}'),
             _pill('📈 ${l.bandwidth}'), _pill('🚫 ${l.blockDevice}'),
             _pill('⚡ ${l.qosRules}'), _pill('🔌 ${l.portForward}'),
-            _pill('📋 ${l.logs}'), _pill('🖥️ ${l.terminal}'),
+            _pill('📋 ${l.logs}'), _pill('📁 Files'), _pill('🖥️ ${l.terminal}'),
           ]).animate(delay: 300.ms).fadeIn(),
           const SizedBox(height: 40),
           SizedBox(
@@ -177,7 +218,6 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 onTap: () => setState(() => _step = 0),
                 child: Icon(Icons.arrow_back_rounded, color: c.textPrimary),
               ),
-              // Dark mode toggle on form page too
               GestureDetector(
                 onTap: () => ref.read(darkModeProvider.notifier).toggle(),
                 child: Icon(
@@ -197,8 +237,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           Text(l.fieldIp, style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           TextField(
-            controller: _hostCtrl,
-            keyboardType: TextInputType.url,
+            controller: _hostCtrl, keyboardType: TextInputType.url,
             decoration: const InputDecoration(
               hintText: '192.168.1.1',
               prefixIcon: Icon(Icons.router_rounded, size: 20),
@@ -209,8 +248,7 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           Text(l.fieldPort, style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           TextField(
-            controller: _portCtrl,
-            keyboardType: TextInputType.number,
+            controller: _portCtrl, keyboardType: TextInputType.number,
             decoration: const InputDecoration(
               hintText: '22',
               prefixIcon: Icon(Icons.terminal_rounded, size: 20),
@@ -232,19 +270,65 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
           Text(l.fieldPassword, style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
           TextField(
-            controller: _passCtrl,
-            obscureText: _obscure,
+            controller: _passCtrl, obscureText: _obscure,
             decoration: InputDecoration(
               prefixIcon: const Icon(Icons.lock_rounded, size: 20),
               suffixIcon: GestureDetector(
                 onTap: () => setState(() => _obscure = !_obscure),
-                child: Icon(_obscure ? Icons.visibility_rounded : Icons.visibility_off_rounded, size: 20),
+                child: Icon(_obscure
+                  ? Icons.visibility_rounded
+                  : Icons.visibility_off_rounded, size: 20),
               ),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
 
-          // Tips box (no VPN mention)
+          // ── Remember Me checkbox ─────────────────────────────────────────
+          GestureDetector(
+            onTap: () => setState(() => _rememberMe = !_rememberMe),
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: c.cardBg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _rememberMe ? AppTheme.primary : c.border,
+                  width: _rememberMe ? 1.5 : 1,
+                ),
+              ),
+              child: Row(children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  width: 22, height: 22,
+                  decoration: BoxDecoration(
+                    color: _rememberMe ? AppTheme.primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: _rememberMe ? AppTheme.primary : c.border,
+                      width: 2,
+                    ),
+                  ),
+                  child: _rememberMe
+                    ? const Icon(Icons.check_rounded, size: 14, color: Colors.white)
+                    : null,
+                ),
+                const SizedBox(width: 12),
+                Expanded(child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Simpan informasi login',
+                      style: Theme.of(context).textTheme.titleSmall),
+                    Text('Username, password, dan IP akan diingat',
+                      style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                )),
+              ]),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Tips
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -263,7 +347,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 ]),
                 const SizedBox(height: 8),
                 Text(l.tipsContent,
-                  style: TextStyle(color: AppTheme.primary.withOpacity(0.8), fontSize: 13)),
+                  style: TextStyle(
+                    color: AppTheme.primary.withOpacity(0.8), fontSize: 13)),
               ],
             ),
           ),
@@ -297,7 +382,8 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
               child: _connecting
                 ? Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                     const SizedBox(height: 18, width: 18,
-                      child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)),
+                      child: CircularProgressIndicator(
+                        color: Colors.white, strokeWidth: 2)),
                     const SizedBox(width: 12),
                     const Text('Connecting via SSH...'),
                   ])
