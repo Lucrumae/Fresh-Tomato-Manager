@@ -279,12 +279,18 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   }
 
   @override
+  // File colors — always dark
+  static const _bg    = Color(0xFF0B0F1A);
+  static const _bar   = Color(0xFF0F1622);
+  static const _brd   = Color(0xFF1A2535);
+  static const _text  = Color(0xFFCDD6F4);
+  static const _muted = Color(0xFF6B7A99);
+
   Widget build(BuildContext context) {
-    final c = Theme.of(context).extension<AppColors>()!;
     return Scaffold(
-      backgroundColor: const Color(0xFF0B0F1A),
+      backgroundColor: _bg,
       appBar: AppBar(
-        backgroundColor: const Color(0xFF111827),
+        backgroundColor: _bar,
         title: Text('File Manager',
           style: GoogleFonts.jetBrainsMono(fontSize: 15, fontWeight: FontWeight.w600)),
         // Path breadcrumb bar
@@ -317,9 +323,9 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal:10, vertical:6),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF0B0F1A),
+                      color: const Color(0xFF060A11),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: const Color(0xFF1F2D3D)),
+                      border: Border.all(color: _brd),
                     ),
                     child: Row(children: [
                       const Icon(Icons.folder_rounded,
@@ -371,8 +377,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
             : ListView.separated(
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 itemCount: _entries.length,
-                separatorBuilder: (_, __) => const Divider(
-                  height: 1, color: Color(0xFF1A2234), indent: 52),
+                separatorBuilder: (_, __) => Divider(height:1, color:_brd, indent:52),
                 itemBuilder: (ctx, i) => _EntryTile(
                   entry: _entries[i],
                   onTap: () => _entries[i].isDir
@@ -411,11 +416,17 @@ class _EntryTile extends StatelessWidget {
   const _EntryTile({required this.entry, required this.onTap,
     required this.onDelete, required this.onRename, required this.formatSize});
 
+  static const _tileBg = Color(0xFF0B0F1A);
+
   @override
   Widget build(BuildContext context) {
     final isDir = entry.isDir;
-    return InkWell(
+    return Material(
+      color: _tileBg,
+      child: InkWell(
       onTap: onTap,
+      splashColor: AppTheme.terminal.withOpacity(0.1),
+      highlightColor: AppTheme.terminal.withOpacity(0.05),
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         child: Row(children: [
@@ -441,7 +452,7 @@ class _EntryTile extends StatelessWidget {
             children: [
               Text(entry.name,
                 style: TextStyle(
-                  color: isDir ? Colors.white : Colors.white70,
+                  color: isDir ? const Color(0xFFE2E8F5) : const Color(0xFFB0BCCF),
                   fontSize: 13.5,
                   fontWeight: isDir ? FontWeight.w500 : FontWeight.normal,
                 ),
@@ -469,7 +480,7 @@ class _EntryTile extends StatelessWidget {
           // More menu
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded, color: Colors.white24, size: 18),
-            color: const Color(0xFF1A2234),
+            color: const Color(0xFF0F1622),
             onSelected: (v) {
               if (v == 'delete') onDelete();
               if (v == 'rename') onRename();
@@ -495,7 +506,7 @@ class _EntryTile extends StatelessWidget {
           ),
         ]),
       ),
-    );
+    ));
   }
 
   IconData _fileIcon(String name) {

@@ -93,6 +93,9 @@ class _MainShellState extends ConsumerState<MainShell>
       const SettingsScreen(),
     ];
 
+    // Auto-focus terminal when tab selected (triggers keyboard)
+    // Handled inside TerminalScreen itself via initState postFrameCallback
+
     return Scaffold(
       body: Column(children: [
         if (_isReconnecting)
