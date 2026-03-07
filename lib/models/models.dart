@@ -9,6 +9,7 @@ class RouterStatus {
   final String firmware;
   final String routerModel;
   final String wifiSsid;
+  final double cpuTempC;
   final bool isOnline;
 
   RouterStatus({
@@ -18,6 +19,7 @@ class RouterStatus {
     required this.wifiSsid, required this.isOnline,
   });
 
+  String get cpuTemp => cpuTempC > 0 ? '${cpuTempC.toStringAsFixed(1)}°C' : '-';
   double get ramPercent => ramTotalMB > 0 ? ramUsedMB / ramTotalMB * 100 : 0;
   String get cpuUsage => '${cpuPercent.toStringAsFixed(1)}%';
   String get ramUsage => '${ramUsedMB} MB';
@@ -27,7 +29,7 @@ class RouterStatus {
     cpuPercent: 0, ramUsedMB: 0, ramTotalMB: 0,
     uptime: '-', wanIp: '-', lanIp: '-',
     firmware: '-', routerModel: 'FreshTomato Router',
-    wifiSsid: '-', isOnline: false,
+    wifiSsid: '-', isOnline: false, cpuTempC: 0,
   );
 }
 

@@ -76,6 +76,9 @@ class DashboardScreen extends ConsumerWidget {
                   Expanded(child: _StatCard(
                     label: 'CPU',
                     value: status.cpuUsage,
+                    sublabel: status.cpuTempC > 0 ? status.cpuTemp : null,
+                    sublabelColor: status.cpuTempC >= 70 ? AppTheme.danger
+                      : status.cpuTempC >= 50 ? AppTheme.warning : AppTheme.success,
                     percent: status.cpuPercent / 100,
                     color: _percentColor(status.cpuPercent, acc),
                     icon: Icons.memory_rounded,
@@ -184,12 +187,14 @@ class DashboardScreen extends ConsumerWidget {
 class _StatCard extends StatelessWidget {
   final String label, value;
   final String? sublabel;
+  final Color? sublabelColor;
   final double percent;
   final Color color;
   final IconData icon;
 
   const _StatCard({
     required this.label, required this.value, this.sublabel,
+    this.sublabelColor,
     required this.percent, required this.color, required this.icon,
   });
 
@@ -207,10 +212,18 @@ class _StatCard extends StatelessWidget {
           const SizedBox(height: 10),
           Row(
             crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(value, style: Theme.of(context).textTheme.titleLarge),
               if (sublabel != null)
-                Text(sublabel!, style: Theme.of(context).textTheme.bodySmall),
+                Row(children: [
+                  if (sublabelColor != null)
+                    Icon(Icons.thermostat_rounded, size: 12, color: sublabelColor),
+                  Text(sublabel!,
+                    style: sublabelColor != null
+                      ? TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: sublabelColor)
+                      : Theme.of(context).textTheme.bodySmall),
+                ]),
             ],
           ),
           const SizedBox(height: 10),

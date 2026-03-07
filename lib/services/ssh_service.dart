@@ -100,6 +100,8 @@ echo "=MEM="
 cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|^Cached"
 echo "=UPTIME="
 cat /proc/uptime
+echo "=TEMP="
+cat /proc/dmu/temperature 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0
 echo "=NVRAM="
 nvram get wan_ipaddr
 nvram get lan_ipaddr
@@ -112,6 +114,80 @@ nvram get os_version
       debugPrint('getStatus error: $e');
       return RouterStatus.empty();
     }
+  }
+
+  // ── Traffic history (daily / monthly from nvram) ──────────────────────────
+  Future<Map<String, dynamic>> getTrafficHistory() async {
+    try {
+      final raw = await run(r'''
+echo "=DAILY="
+nvram get traff-$(date +%Y-%m) 2>/dev/null || nvram get wan_ctrafd 2>/dev/null || echo ""
+echo "=MONTHLY="
+for m in $(seq 0 5); do
+  key=$(date -d "-${m} month" +%Y-%m 2>/dev/null || date -v-${m}m +%Y-%m 2>/dev/null)
+  val=$(nvram get "traff-${key}" 2>/dev/null)
+  if [ -n "$val" ]; then echo "${key}:${val}"; fi
+done
+''');
+      return _parseTrafficHistory(raw);
+    } catch (e) {
+      return {};
+    }
+  }
+
+  Map<String, dynamic> _parseTrafficHistory(String raw) {
+    final result = <String, dynamic>{
+      'daily': <Map<String, double>>[],
+      'monthly': <Map<String, dynamic>>[],
+    };
+    try {
+      final sections = _parseSections(raw);
+      // Daily: "day:rxGB rxKB:txGB txKB[...]" format
+      final dailyStr = sections['DAILY']?.firstOrNull ?? '';
+      if (dailyStr.isNotEmpty) {
+        final days = dailyStr.split('[').where((s) => s.isNotEmpty).toList();
+        final dailyList = <Map<String, double>>[];
+        for (int i = 0; i < days.length && i < 31; i++) {
+          final parts = days[i].replaceAll(']','').trim().split(':');
+          if (parts.length >= 2) {
+            final rxParts = parts[0].split(' ');
+            final txParts = parts[1].split(' ');
+            final rxGB = (double.tryParse(rxParts[0]) ?? 0);
+            final rxKB = (double.tryParse(rxParts.length > 1 ? rxParts[1] : '0') ?? 0);
+            final txGB = (double.tryParse(txParts[0]) ?? 0);
+            final txKB = (double.tryParse(txParts.length > 1 ? txParts[1] : '0') ?? 0);
+            dailyList.add({
+              'rx': rxGB + rxKB / (1024 * 1024),
+              'tx': txGB + txKB / (1024 * 1024),
+              'day': (i + 1).toDouble(),
+            });
+          }
+        }
+        result['daily'] = dailyList;
+      }
+      // Monthly: "YYYY-MM:rxGB rxKB:txGB txKB"
+      final monthlyList = <Map<String, dynamic>>[];
+      for (final line in sections['MONTHLY'] ?? []) {
+        final idx = line.indexOf(':');
+        if (idx < 0) continue;
+        final month = line.substring(0, idx);
+        final rest = line.substring(idx + 1).split(':');
+        if (rest.length < 2) continue;
+        final rxParts = rest[0].trim().split(' ');
+        final txParts = rest[1].trim().split(' ');
+        final rxGB = (double.tryParse(rxParts[0]) ?? 0);
+        final rxKB = (double.tryParse(rxParts.length > 1 ? rxParts[1] : '0') ?? 0);
+        final txGB = (double.tryParse(txParts[0]) ?? 0);
+        final txKB = (double.tryParse(txParts.length > 1 ? txParts[1] : '0') ?? 0);
+        monthlyList.add({
+          'month': month,
+          'rx': rxGB + rxKB / (1024 * 1024),
+          'tx': txGB + txKB / (1024 * 1024),
+        });
+      }
+      result['monthly'] = monthlyList;
+    } catch (_) {}
+    return result;
   }
 
   RouterStatus _parseStatus(String raw) {
@@ -157,6 +233,18 @@ nvram get os_version
         uptime = d > 0 ? '${d}d ${h}h ${m}m' : '${h}h ${m}m';
       }
 
+      // CPU Temp
+      double cpuTempC = 0;
+      final tempLine = (sections['TEMP'] ?? []).firstOrNull ?? '0';
+      final tempVal = double.tryParse(tempLine.trim()) ?? 0;
+      // /proc/dmu/temperature returns value like "temperature: 52000" or raw "52000"
+      // /sys/class/thermal returns millidegrees e.g. 52000
+      if (tempVal > 1000) {
+        cpuTempC = tempVal / 1000; // millidegrees -> degrees
+      } else if (tempVal > 0) {
+        cpuTempC = tempVal; // already in degrees
+      }
+
       final nvram = sections['NVRAM'] ?? [];
       return RouterStatus(
         cpuPercent: cpuPercent.clamp(0, 100),
@@ -169,6 +257,7 @@ nvram get os_version
         routerModel: nvram.length > 3 ? nvram[3] : 'FreshTomato',
         firmware: nvram.length > 4 ? nvram[4] : '-',
         isOnline: true,
+        cpuTempC: cpuTempC,
       );
     } catch (e) {
       return RouterStatus.empty();
