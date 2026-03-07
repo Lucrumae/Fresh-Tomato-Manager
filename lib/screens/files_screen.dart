@@ -24,7 +24,7 @@ class _FsEntry {
   });
 }
 
-// ── Transfer progress ─────────────────────────────────────────────────────────
+//  Transfer progress 
 class _Transfer {
   final String name;
   final bool isUpload;
@@ -55,7 +55,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   @override void initState() { super.initState(); _ls('/'); }
 
-  // ── Theming ────────────────────────────────────────────────────────────────
+  //  Theming 
   bool get _isDark => _brightness == Brightness.dark;
   Brightness _brightness = Brightness.dark;
   Color _accent = const Color(0xFF00E5A0);
@@ -64,13 +64,13 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   Color get _bar  => _isDark ? const Color(0xFF0F1622) : const Color(0xFFE8EDF5);
   Color get _brd  => _isDark ? const Color(0xFF1A2535) : const Color(0xFFCBD5E0);
 
-  // ── SSH helpers ────────────────────────────────────────────────────────────
+  //  SSH helpers 
   Future<String> _run(String cmd) async {
     final ssh = ref.read(sshServiceProvider);
     return ssh.run(cmd);
   }
 
-  // ── List directory ─────────────────────────────────────────────────────────
+  //  List directory 
   Future<void> _ls(String path) async {
     setState(() { _loading = true; _error = null; });
     try {
@@ -124,7 +124,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     _ls(path);
   }
 
-  // ── Download ───────────────────────────────────────────────────────────────
+  //  Download 
   Future<void> _download(_FsEntry entry) async {
     if (Platform.isAndroid) {
       if (!await _ensureStoragePermission()) return;
@@ -137,7 +137,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      // Use SSH execute + cat — more reliable on embedded routers than SFTP
+      // Use SSH execute + cat - more reliable on embedded routers than SFTP
       setState(() => transfer.progress = -1); // indeterminate while reading
 
       final session = await ssh.client!.execute('cat "${entry.path}"');
@@ -156,7 +156,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       }
       await session.done;
 
-      if (totalBytes == 0) throw Exception('File kosong atau tidak dapat dibaca');
+      if (totalBytes == 0) throw Exception('File is empty or cannot be read');
 
       // Write to local file
       Directory saveDir;
@@ -179,7 +179,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       setState(() { transfer.done = true; transfer.progress = 1.0; });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('✓ Disimpan ke: $localPath'),
+          content: Text(' Disimpan ke: $localPath'),
           action: SnackBarAction(label: 'OK', onPressed: () {}),
         ));
       }
@@ -193,7 +193,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     if (mounted) setState(() => _transfers.remove(transfer));
   }
 
-  // ── Upload ─────────────────────────────────────────────────────────────────
+  //  Upload 
   Future<void> _upload() async {
     // Pick file
     final result = await FilePicker.platform.pickFiles(allowMultiple: false);
@@ -221,7 +221,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final bytes = await localFile.readAsBytes();
       final escapedPath = remotePath.replaceAll("'", "'\''");
 
-      // Stream raw bytes directly into SSH stdin — works on all BusyBox routers
+      // Stream raw bytes directly into SSH stdin - works on all BusyBox routers
       // Uses 'dd' to write stdin to file, no base64 needed, no ARG_MAX limit
       final session = await ssh.client!.execute(
         "dd of='$escapedPath' bs=4096"
@@ -246,7 +246,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       _ls(_cwd);
 
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('✓ ${picked.name} berhasil diupload')));
+        SnackBar(content: Text(' ${picked.name} berhasil diupload')));
     } catch (e) {
       setState(() { transfer.error = e.toString(); transfer.done = true; });
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
@@ -258,7 +258,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     if (mounted) setState(() => _transfers.remove(transfer));
   }
 
-  // ── File operations ────────────────────────────────────────────────────────
+  //  File operations 
   Future<void> _showContent(_FsEntry entry) async {
     if (entry.size > 512 * 1024) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -278,15 +278,15 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   Future<void> _delete(_FsEntry entry) async {
     final ok = await showDialog<bool>(context: context, builder: (_) => AlertDialog(
-      title: Text('Hapus ${entry.isDir ? "Folder" : "File"}?'),
+      title: Text('Delete ${entry.isDir ? "Folder" : "File"}?'),
       content: Text(entry.path),
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false),
-          child: const Text('Batal')),
+          child: const Text('Cancel')),
         ElevatedButton(
           style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
           onPressed: () => Navigator.pop(context, true),
-          child: const Text('Hapus')),
+          child: const Text('Delete')),
       ],
     ));
     if (ok != true) return;
@@ -305,9 +305,9 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       title: const Text('Rename'),
       content: TextField(controller: ctrl, autofocus: true),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-          child: const Text('Simpan')),
+          child: const Text('Save')),
       ],
     ));
     if (name == null || name.isEmpty || name == entry.name) return;
@@ -324,13 +324,13 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   Future<void> _mkdir() async {
     final ctrl = TextEditingController();
     final name = await showDialog<String>(context: context, builder: (_) => AlertDialog(
-      title: const Text('Buat Folder Baru'),
+      title: const Text('New Folder'),
       content: TextField(controller: ctrl, autofocus: true,
         decoration: const InputDecoration(hintText: 'nama folder')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()),
-          child: const Text('Buat')),
+          child: const Text('Create')),
       ],
     ));
     if (name == null || name.isEmpty) return;
@@ -356,14 +356,14 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     var status = await perm.status;
     if (status.isGranted) return true;
 
-    // Directly request — this triggers the native OS permission popup
+    // Directly request - this triggers the native OS permission popup
     status = await perm.request();
     if (status.isGranted) return true;
 
     // Only reach here if denied
     if (mounted) {
       if (status.isPermanentlyDenied) {
-        // OS won't show popup anymore — guide user to App Settings
+        // OS won't show popup anymore - guide user to App Settings
         await showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
@@ -589,7 +589,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   void _goBack()  { _histIdx--; _ls(_history[_histIdx]); }
   void _goFwd()   { _histIdx++; _ls(_history[_histIdx]); }
-  // ── Chmod ─────────────────────────────────────────────────────────────────
+  //  Chmod 
   Future<void> _chmod(_FsEntry entry) async {
     // Parse current octal from permissions string e.g. "drwxr-xr-x"
     String _toOctal(String p) {
@@ -645,7 +645,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     }
   }
 
-  // ── Download multiple selected ────────────────────────────────────────────
+  //  Download multiple selected 
   Future<void> _downloadSelected() async {
     final files = _entries.where((e) => _selected.contains(e.path) && !e.isDir).toList();
     if (files.isEmpty) {
@@ -659,7 +659,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     }
   }
 
-  // ── Chmod multiple selected ────────────────────────────────────────────────
+  //  Chmod multiple selected 
   Future<void> _chmodSelected() async {
     if (_selected.isEmpty) return;
     final ctrl = TextEditingController(text: '755');
@@ -705,7 +705,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     }
   }
 
-  // ── Delete multiple selected ───────────────────────────────────────────────
+  //  Delete multiple selected 
   Future<void> _deleteSelected() async {
     if (_selected.isEmpty) return;
     final count = _selected.length;
@@ -750,7 +750,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
         style: GoogleFonts.jetBrainsMono(fontSize: 13),
         decoration: const InputDecoration(hintText: '/tmp, /var, /etc...')),
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Batal')),
+        TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
         ElevatedButton(onPressed: () => Navigator.pop(context, ctrl.text.trim()),
           child: const Text('Pergi')),
       ],
@@ -777,7 +777,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   ]));
 }
 
-// ── Entry Row ─────────────────────────────────────────────────────────────────
+//  Entry Row 
 class _EntryRow extends StatelessWidget {
   final _FsEntry entry;
   final bool isDark, isSelected, selectMode;
@@ -929,7 +929,7 @@ class _EntryRow extends StatelessWidget {
   }
 }
 
-// ── Transfer Progress Card ────────────────────────────────────────────────────
+//  Transfer Progress Card 
 class _TransferCard extends StatelessWidget {
   final _Transfer transfer;
   const _TransferCard({required this.transfer});

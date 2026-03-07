@@ -22,10 +22,14 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   }
 
   void _scrollToBottom() {
+    // Use multiple frames to ensure list is fully laid out
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-      }
+      if (!mounted) return;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_scrollCtrl.hasClients) {
+          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+        }
+      });
     });
   }
   String _filter = 'all'; // all, error, warn
@@ -43,6 +47,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(logsProvider.notifier).startPolling();
+      // Scroll to bottom after first data loads
+      Future.delayed(const Duration(milliseconds: 800), _scrollToBottom);
     });
   }
 

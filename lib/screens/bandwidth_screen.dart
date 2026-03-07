@@ -47,7 +47,9 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
     // Also get qos_classnames for class labels
     final raw = await ssh.run(
       'echo "=RULES="; nvram get qos_orules 2>/dev/null || echo ""; '
-      'echo "=CLASSES="; nvram get qos_classnames 2>/dev/null || echo ""'
+      'echo "=CLASSES="; nvram get qos_classnames 2>/dev/null || echo ""; '
+      'echo "=IRATES="; nvram get qos_irates 2>/dev/null || echo ""; '
+      'echo "=ORATES="; nvram get qos_orates 2>/dev/null || echo ""'
     );
     final rules = <Map<String, String>>[];
     
@@ -66,49 +68,67 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
     // Parse class names (space separated: "Highest High Medium Low ...")
     final classNames = classStr.trim().isEmpty ? <String>[] : classStr.trim().split(RegExp(r'\s+'));
     
-    // FreshTomato qos_orules format: each rule ends with ">", fields separated by "<"
-    // Actual field order depends on version, common: prio<src<dst<proto<sport<dport<desc
-    // Or: tcp/udp<name<srcip<dstip<srcport<dstport<prio
+    // FreshTomato qos_orules: rules delimited by ">", fields by "<"
+    // Format: prio<src_ip<dst_ip<proto<src_port<dst_port<desc
+    // proto: 0=any, 6=tcp, 17=udp, 1=icmp (numeric)
+    final protoMap = {'0':'any','6':'tcp','17':'udp','1':'icmp','58':'icmpv6'};
+    int ruleIdx = 0;
     for (final chunk in rulesStr.split('>')) {
       final trimmed = chunk.trim();
       if (trimmed.isEmpty) continue;
+      ruleIdx++;
       final parts = trimmed.split('<');
-      if (parts.length < 2) continue;
       
-      // Detect format by checking if first field is a number (prio) or protocol
-      final firstField = parts[0].trim();
-      final isPrioFirst = int.tryParse(firstField) != null;
+      // Try to parse: fields can vary, find prio (numeric 0-7) and desc (last text field)
+      String prio = '5', src = '', dst = '', proto = 'any', sport = '', dport = '', desc = '';
       
-      String prio, proto, sport, dport, desc;
-      if (isPrioFirst) {
-        // Format: prio<src<dst<proto<sport<dport<desc
-        prio  = parts[0].trim();
-        proto = parts.length > 3 ? parts[3].trim() : 'any';
-        sport = parts.length > 4 ? parts[4].trim() : '';
-        dport = parts.length > 5 ? parts[5].trim() : '';
-        desc  = parts.length > 6 ? parts[6].trim() : '';
-      } else {
-        // Format: proto<name<src<dst<sport<dport<prio  (older format)
-        proto = parts[0].trim();
-        desc  = parts.length > 1 ? parts[1].trim() : '';
-        sport = parts.length > 4 ? parts[4].trim() : '';
-        dport = parts.length > 5 ? parts[5].trim() : '';
-        prio  = parts.length > 6 ? parts[6].trim() : '5';
+      if (parts.isNotEmpty) {
+        // Field[0] is prio if numeric, else it's proto name
+        final f0 = parts[0].trim();
+        if (int.tryParse(f0) != null && int.parse(f0) <= 10) {
+          // Standard format: prio<src<dst<proto<sport<dport<desc
+          prio  = f0;
+          src   = parts.length > 1 ? parts[1].trim() : '';
+          dst   = parts.length > 2 ? parts[2].trim() : '';
+          final protoRaw = parts.length > 3 ? parts[3].trim() : '0';
+          proto = protoMap[protoRaw] ?? (protoRaw.isEmpty ? 'any' : protoRaw);
+          sport = parts.length > 4 ? parts[4].trim() : '';
+          dport = parts.length > 5 ? parts[5].trim() : '';
+          // desc is last non-empty field after index 5
+          for (int i = 6; i < parts.length; i++) {
+            final p = parts[i].trim();
+            if (p.isNotEmpty) { desc = p; break; }
+          }
+        } else {
+          // Alt format: proto<desc<src<dst<sport<dport<prio
+          proto = protoMap[f0] ?? f0;
+          desc  = parts.length > 1 ? parts[1].trim() : '';
+          src   = parts.length > 2 ? parts[2].trim() : '';
+          dst   = parts.length > 3 ? parts[3].trim() : '';
+          sport = parts.length > 4 ? parts[4].trim() : '';
+          dport = parts.length > 5 ? parts[5].trim() : '';
+          final lastPrio = parts.length > 6 ? parts[6].trim() : '';
+          prio  = int.tryParse(lastPrio) != null ? lastPrio : '5';
+        }
       }
       
       // Resolve class name from prio index
       final prioIdx = (int.tryParse(prio) ?? 5) - 1;
       final className = (prioIdx >= 0 && prioIdx < classNames.length) ? classNames[prioIdx] : '';
       
-      // Use desc if available, otherwise use class name, otherwise "Rule N"
-      final label = desc.isNotEmpty ? desc : (className.isNotEmpty ? className : '');
+      // Build label: prefer desc, then class name, then numbered
+      final label = desc.isNotEmpty ? desc 
+          : (className.isNotEmpty ? className : 'Rule $ruleIdx');
+      
+      // Format port display
+      final portDisplay = dport.isNotEmpty && dport != '0' ? dport 
+          : (sport.isNotEmpty && sport != '0' ? sport : 'any');
       
       rules.add({
-        'prio': prio, 'src': parts.length > 1 ? parts[1] : '',
-        'dst': parts.length > 2 ? parts[2] : '',
+        'prio': prio, 'src': src, 'dst': dst,
         'proto': proto, 'srcport': sport, 'dstport': dport,
-        'desc': label,
-        'className': className,
+        'desc': label, 'className': className,
+        'portDisplay': portDisplay,
       });
     }
     return rules;
@@ -125,8 +145,8 @@ final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((r
   if (!ssh.isConnected) return [];
   try {
     final raw = await ssh.run(
-        'cat /proc/net/nf_conntrack 2>/dev/null | head -100 || '
-        'cat /proc/net/ip_conntrack 2>/dev/null | head -100 || echo ""');
+        'cat /proc/net/nf_conntrack 2>/dev/null || '
+        'cat /proc/net/ip_conntrack 2>/dev/null || echo ""');
     final result = <Map<String, String>>[];
     for (final line in raw.split('\n')) {
       if (line.trim().isEmpty) continue;
@@ -845,7 +865,7 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final basic  = ref.watch(qosBasicProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
-    final modeMap = {'0': 'HTB (classic)', '1': 'CAKE AQM', '2': 'HFSC'};
+    final modeMap = {'0': 'HTB (classic)', '1': 'HFSC', '2': 'HFSC (alt)', '3': 'CAKE AQM'};
 
     return basic.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -1227,7 +1247,7 @@ class _QosConnectionsTabState extends ConsumerState<_QosConnectionsTab> {
           Expanded(
             child: ListView.separated(
               padding: EdgeInsets.zero,
-              itemCount: list.length > 50 ? 50 : list.length,
+              itemCount: list.length,
               separatorBuilder: (_, __) => Divider(height: 1, color: c.border),
               itemBuilder: (_, i) {
                 final conn  = list[i];
