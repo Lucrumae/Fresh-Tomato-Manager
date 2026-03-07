@@ -7,12 +7,14 @@ import 'theme/app_theme.dart';
 import 'screens/setup_screen.dart';
 import 'screens/main_shell.dart';
 import 'services/app_state.dart';
+import 'services/background_service.dart';
 import 'services/notification_service.dart';
 
 
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  BackgroundService.init();
   SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
     statusBarColor: Colors.transparent,
   ));

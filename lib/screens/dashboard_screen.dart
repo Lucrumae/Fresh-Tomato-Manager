@@ -84,7 +84,7 @@ class DashboardScreen extends ConsumerWidget {
                   Expanded(child: _StatCard(
                     label: 'RAM',
                     value: status.ramUsage,
-                    sublabel: '/ \${status.ramTotal}',
+                    sublabel: '/ ${status.ramTotal}',
                     percent: status.ramPercent / 100,
                     color: _percentColor(status.ramPercent, acc),
                     icon: Icons.storage_rounded,

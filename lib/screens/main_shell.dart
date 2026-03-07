@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
+import '../services/background_service.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 import '../services/connection_keeper.dart';
 import 'dashboard_screen.dart';
 import 'devices_screen.dart';
@@ -25,6 +27,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   @override
   void initState() {
     super.initState();
+    BackgroundService.start();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(routerStatusProvider.notifier).startPolling();
       ref.read(devicesProvider.notifier).startPolling();
@@ -45,6 +48,7 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 
   void _onReconnectFailed() {
+    BackgroundService.stop();
     if (!mounted) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -92,7 +96,8 @@ class _MainShellState extends ConsumerState<MainShell> {
       const SettingsScreen(),
     ];
 
-    return Scaffold(
+    return WithForegroundTask(
+      child: Scaffold(
       body: IndexedStack(index: _index, children: screens),
       bottomNavigationBar: Theme(
         data: Theme.of(context).copyWith(

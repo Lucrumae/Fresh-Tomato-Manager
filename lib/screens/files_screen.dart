@@ -325,9 +325,12 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     }
   }
 
-  /// Returns true if permission granted, false if denied.
+  /// Returns true if permission granted.
+  /// Triggers system permission popup (Android/iOS native dialog).
+  /// Only shows in-app dialog if PERMANENTLY denied (user must go to Settings).
   Future<bool> _ensureStoragePermission() async {
     final sdkInt = await _androidSdk();
+    // Pick the right permission for the Android version
     final perm = sdkInt >= 33
         ? Permission.manageExternalStorage
         : Permission.storage;
@@ -335,38 +338,21 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     var status = await perm.status;
     if (status.isGranted) return true;
 
-    // Show rationale before requesting
-    if (mounted) {
-      final proceed = await showDialog<bool>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Storage Permission'),
-          content: const Text(
-            'Tomato Manager needs storage access to upload and download files.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Allow')),
-          ],
-        ),
-      ) ?? false;
-      if (!proceed) return false;
-    }
-
+    // Directly request — this triggers the native OS permission popup
     status = await perm.request();
     if (status.isGranted) return true;
 
+    // Only reach here if denied
     if (mounted) {
       if (status.isPermanentlyDenied) {
+        // OS won't show popup anymore — guide user to App Settings
         await showDialog(
           context: context,
           builder: (ctx) => AlertDialog(
-            title: const Text('Permission Blocked'),
+            title: const Text('Storage Permission Blocked'),
             content: const Text(
-              'Storage permission was blocked. Please enable it manually in App Settings.'),
+              'Storage permission was permanently denied. '
+              'Please enable it in App Settings to upload/download files.'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(ctx),
@@ -377,9 +363,6 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
             ],
           ),
         );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Storage permission denied')));
       }
     }
     return false;
