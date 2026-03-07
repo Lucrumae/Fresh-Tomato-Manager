@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
+import '../services/connection_keeper.dart';
+import '../services/ssh_service.dart';
 import 'dashboard_screen.dart';
 import 'devices_screen.dart';
 import 'bandwidth_screen.dart';
@@ -16,23 +18,63 @@ class MainShell extends ConsumerStatefulWidget {
   ConsumerState<MainShell> createState() => _MainShellState();
 }
 
-class _MainShellState extends ConsumerState<MainShell> {
+class _MainShellState extends ConsumerState<MainShell>
+    with WidgetsBindingObserver {
   int _index = 0;
+  bool _isReconnecting = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(routerStatusProvider.notifier).startPolling();
       ref.read(devicesProvider.notifier).startPolling();
       ref.read(bandwidthProvider.notifier).startPolling();
+      // Start connection keeper
+      ref.read(connectionKeeperProvider).start();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    ref.read(connectionKeeperProvider).stop();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkAndReconnect();
+    }
+  }
+
+  Future<void> _checkAndReconnect() async {
+    await Future.delayed(const Duration(milliseconds: 800));
+    if (!mounted) return;
+    final ssh = ref.read(sshServiceProvider);
+    if (!ssh.isConnected) {
+      setState(() => _isReconnecting = true);
+      final config = ref.read(configProvider);
+      if (config != null) {
+        final error = await ssh.connect(config);
+        if (error == null && mounted) {
+          ref.read(routerStatusProvider.notifier).startPolling();
+          ref.read(devicesProvider.notifier).startPolling();
+          ref.read(bandwidthProvider.notifier).startPolling();
+        }
+      }
+      if (mounted) setState(() => _isReconnecting = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final l = AppL10n.of(context);
     final c = Theme.of(context).extension<AppColors>()!;
+    // Watch SSH connection state via routerStatus
+    final status = ref.watch(routerStatusProvider);
 
     final tabs = [
       (Icons.dashboard_rounded,  l.dashboard),
@@ -43,19 +85,41 @@ class _MainShellState extends ConsumerState<MainShell> {
       (Icons.settings_rounded,   l.settings),
     ];
 
-    // Terminal is a Column widget so it needs a Scaffold with body only
-    // No WillPopScope needed - it's just another tab
     final screens = [
       const DashboardScreen(),
       const DevicesScreen(),
       const BandwidthScreen(),
       const LogsScreen(),
-      const _TerminalTab(),   // wrapped in Scaffold
+      const _TerminalTab(),
       const SettingsScreen(),
     ];
 
     return Scaffold(
-      body: IndexedStack(index: _index, children: screens),
+      body: Column(
+        children: [
+          // Reconnecting banner
+          if (_isReconnecting)
+            Material(
+              color: AppTheme.warning.withOpacity(0.15),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Row(children: [
+                  const SizedBox(width: 14, height: 14,
+                    child: CircularProgressIndicator(
+                      color: AppTheme.warning, strokeWidth: 1.5)),
+                  const SizedBox(width: 10),
+                  Text('Reconnecting...',
+                    style: TextStyle(
+                      color: AppTheme.warning,
+                      fontSize: 13, fontWeight: FontWeight.w500)),
+                ]),
+              ),
+            ),
+          Expanded(
+            child: IndexedStack(index: _index, children: screens),
+          ),
+        ],
+      ),
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: c.surface,
@@ -99,15 +163,11 @@ class _MainShellState extends ConsumerState<MainShell> {
   }
 }
 
-// Terminal tab wrapped in Scaffold agar AppBar tetap ada
 class _TerminalTab extends StatelessWidget {
   const _TerminalTab();
-
   @override
-  Widget build(BuildContext context) {
-    return const Scaffold(
-      backgroundColor: Color(0xFF0D1117),
-      body: SafeArea(child: TerminalScreen()),
-    );
-  }
+  Widget build(BuildContext context) => const Scaffold(
+    backgroundColor: Color(0xFF0D1117),
+    body: SafeArea(child: TerminalScreen()),
+  );
 }

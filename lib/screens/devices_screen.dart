@@ -154,15 +154,30 @@ class _DeviceCard extends ConsumerWidget {
                     if (device.isBlocked)
                       StatusBadge(label: 'Blocked', color: AppTheme.danger),
                   ]),
-                  const SizedBox(height: 3),
-                  Text(device.ip,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).extension<AppColors>()!.textSecondary,
+                  const SizedBox(height: 2),
+                  // Hostname (jika berbeda dari display name)
+                  if (device.hostname.isNotEmpty && device.hostname != device.displayName)
+                    Text(device.hostname,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: AppTheme.primary.withOpacity(0.8),
+                        fontStyle: FontStyle.italic,
+                      ),
                     ),
-                  ),
-                  Text(device.mac,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
+                  Row(children: [
+                    Icon(Icons.circle, size: 6,
+                      color: Theme.of(context).extension<AppColors>()!.textSecondary),
+                    const SizedBox(width: 4),
+                    Text(device.ip,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).extension<AppColors>()!.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(child: Text(device.mac,
+                      style: Theme.of(context).textTheme.bodySmall,
+                      overflow: TextOverflow.ellipsis,
+                    )),
+                  ]),
                 ],
               ),
             ),

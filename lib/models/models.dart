@@ -36,6 +36,7 @@ class ConnectedDevice {
   final String mac;
   final String ip;
   String name;
+  final String hostname;
   final String interface;
   final String rssi;
   bool isBlocked;
@@ -43,16 +44,18 @@ class ConnectedDevice {
 
   ConnectedDevice({
     required this.mac, required this.ip, required this.name,
+    this.hostname = '',
     required this.interface, required this.rssi,
     required this.isBlocked, required this.lastSeen,
   });
 
-  String get displayName => name.isNotEmpty ? name : mac;
+  String get displayName => name.isNotEmpty ? name : (hostname.isNotEmpty ? hostname : mac);
   bool get isWireless => interface.startsWith('wl') || interface == 'wifi';
   String get connectionType => isWireless ? 'WiFi' : 'Ethernet';
 
   ConnectedDevice copyWith({String? name, bool? isBlocked}) => ConnectedDevice(
     mac: mac, ip: ip, name: name ?? this.name,
+    hostname: hostname,
     interface: interface, rssi: rssi,
     isBlocked: isBlocked ?? this.isBlocked, lastSeen: lastSeen,
   );

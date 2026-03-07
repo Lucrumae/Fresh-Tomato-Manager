@@ -178,7 +178,6 @@ nvram get os_version
   // ── Devices ────────────────────────────────────────────────────────────────
   Future<List<ConnectedDevice>> getDevices() async {
     try {
-      // FreshTomato: gunakan wl -i untuk list wireless clients + /proc/net/arp
       final output = await run(r'''
 echo "=ARP="
 cat /proc/net/arp
@@ -186,6 +185,8 @@ echo "=WL0="
 wl -i eth1 assoclist 2>/dev/null || wl assoclist 2>/dev/null || echo ""
 echo "=WL1="
 wl -i eth2 assoclist 2>/dev/null || echo ""
+echo "=LEASES="
+cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || echo ""
 echo "=NAMES="
 nvram get dhcp_static_leases 2>/dev/null || echo ""
 echo "=BLOCK="
@@ -216,6 +217,17 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
       if (m != null) wlMacs.add(m.group(1)!.toUpperCase());
     }
 
+    // dnsmasq.leases: "expiry MAC IP hostname clientid"
+    final hostnameMap = <String, String>{};
+    for (final line in sections['LEASES'] ?? []) {
+      final parts = line.trim().split(RegExp(r'\s+'));
+      if (parts.length >= 4) {
+        final mac = parts[1].toUpperCase();
+        final host = parts[3] == '*' ? '' : parts[3];
+        if (host.isNotEmpty) hostnameMap[mac] = host;
+      }
+    }
+
     // DHCP static leases untuk nama (format: MAC:IP:hostname:lease>...)
     final nameMap = <String, String>{};
     for (final entry in (sections['NAMES']?.firstOrNull ?? '').split('>')) {
@@ -238,6 +250,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
       devices.add(ConnectedDevice(
         mac: mac, ip: ip,
         name: nameMap[mac] ?? '',
+        hostname: hostnameMap[mac] ?? '',
         interface: wlMacs.contains(mac) ? 'wl0' : iface,
         rssi: '-',
         isBlocked: blockedMacs.contains(mac),
@@ -342,7 +355,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
         time: DateTime.now(), process: '-', level: 'info', message: line,
       ));
     }
-    return entries.reversed.toList();
+    return entries; // sudah urut dari atas ke bawah (log lama di atas, baru di bawah)
   }
 
   DateTime _tryParseTime(String s) {
