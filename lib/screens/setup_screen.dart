@@ -341,9 +341,9 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
                 Expanded(child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Simpan informasi login',
+                    Text('Save login info',
                       style: Theme.of(context).textTheme.titleSmall),
-                    Text('Username, password, dan IP akan diingat',
+                    Text('Username, password and IP will be remembered',
                       style: Theme.of(context).textTheme.bodySmall),
                   ],
                 )),

@@ -171,10 +171,10 @@ class DashboardScreen extends ConsumerWidget {
     );
   }
 
-  Color _percentColor(double p) {
+  Color _percentColor(double p, Color accent) {
     if (p > 80) return AppTheme.danger;
     if (p > 60) return AppTheme.warning;
-    return AppTheme.success;
+    return accent;
   }
 }
 
@@ -254,7 +254,7 @@ class _BandwidthCard extends StatelessWidget {
             Expanded(child: _BwStat(
               label: '↓ Download',
               value: _fmt(bandwidth.currentRx),
-              color: AppTheme.primary,
+              color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
             )),
             Expanded(child: _BwStat(
               label: '↑ Upload',

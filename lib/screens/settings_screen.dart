@@ -105,7 +105,7 @@ class SettingsScreen extends ConsumerWidget {
                   Expanded(child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Warna Aksen', style: Theme.of(context).textTheme.titleSmall),
+                      Text('Accent Color', style: Theme.of(context).textTheme.titleSmall),
                       Text('Aktif: ${accent.label}',
                         style: Theme.of(context).textTheme.bodySmall),
                     ],

@@ -134,7 +134,7 @@ class _DeviceCard extends ConsumerWidget {
               ),
               child: Icon(
                 device.isWireless ? Icons.wifi_rounded : Icons.cable_rounded,
-                color: device.isBlocked ? AppTheme.danger : AppTheme.primary,
+                color: device.isBlocked ? AppTheme.danger : Theme.of(context).extension<AppColors>()!.accent,
                 size: 22,
               ),
             ),
@@ -276,9 +276,9 @@ class _FilterChip extends StatelessWidget {
         margin: const EdgeInsets.only(right: 8),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
         decoration: BoxDecoration(
-          color: selected ? AppTheme.primary : AppTheme.surface,
+          color: selected ? Theme.of(context).extension<AppColors>()!.accent : Theme.of(context).extension<AppColors>()!.surface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? AppTheme.primary : AppTheme.border),
+          border: Border.all(color: selected ? Theme.of(context).extension<AppColors>()!.accent : AppTheme.border),
         ),
         child: Text(label, style: TextStyle(
           color: selected ? Colors.white : AppTheme.textSecondary,

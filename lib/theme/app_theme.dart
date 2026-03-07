@@ -3,13 +3,13 @@ import 'package:google_fonts/google_fonts.dart';
 
 // ── Accent colors user can pick ────────────────────────────────────────────────
 enum AccentColor {
-  green  (Color(0xFF00E5A0), Color(0xFF00B87A), 'Hijau'),
-  blue   (Color(0xFF4F7EFF), Color(0xFF2D5FE0), 'Biru'),
-  orange (Color(0xFFFF8C00), Color(0xFFE67300), 'Oranye'),
-  red    (Color(0xFFEF4444), Color(0xFFCC2222), 'Merah'),
-  purple (Color(0xFF9B59FC), Color(0xFF7B3FDC), 'Ungu'),
+  green  (Color(0xFF00E5A0), Color(0xFF00B87A), 'Green'),
+  blue   (Color(0xFF4F7EFF), Color(0xFF2D5FE0), 'Blue'),
+  orange (Color(0xFFFF8C00), Color(0xFFE67300), 'Orange'),
+  red    (Color(0xFFEF4444), Color(0xFFCC2222), 'Red'),
+  purple (Color(0xFF9B59FC), Color(0xFF7B3FDC), 'Purple'),
   pink   (Color(0xFFFF6B9D), Color(0xFFE0417A), 'Pink'),
-  yellow (Color(0xFFF59E0B), Color(0xFFD4850A), 'Kuning');
+  yellow (Color(0xFFF59E0B), Color(0xFFD4850A), 'Yellow');
 
   final Color main;
   final Color dark;

@@ -53,6 +53,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   // ── Theming ────────────────────────────────────────────────────────────────
   bool get _isDark => _brightness == Brightness.dark;
   Brightness _brightness = Brightness.dark;
+  Color _accent = const Color(0xFF00E5A0);
 
   Color get _bg   => _isDark ? const Color(0xFF0B0F1A) : const Color(0xFFF8FAFC);
   Color get _bar  => _isDark ? const Color(0xFF0F1622) : const Color(0xFFE8EDF5);
@@ -127,7 +128,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
         final manageStatus = await Permission.manageExternalStorage.request();
         if (!manageStatus.isGranted && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Izin storage diperlukan untuk download')));
+            const SnackBar(content: Text('Storage permission required for download')));
           return;
         }
       }
@@ -198,7 +199,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     final localPath = picked.path;
     if (localPath == null) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Tidak dapat mengakses file')));
+        const SnackBar(content: Text('Cannot access file')));
       return;
     }
 
@@ -336,17 +337,18 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       context: context, isScrollControlled: true,
       backgroundColor: _bar,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16))
+    )),
       builder: (_) => DraggableScrollableSheet(
         expand: false, initialChildSize: 0.85, maxChildSize: 0.95, minChildSize: 0.4,
         builder: (_, sc) => Column(children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16,12,8,8),
             child: Row(children: [
-              Icon(Icons.insert_drive_file_rounded, color: const Color(0xFF00E5A0), size: 16),
+              Icon(Icons.insert_drive_file_rounded, color: _accent, size: 16),
               const SizedBox(width: 8),
               Expanded(child: Text(title, style: GoogleFonts.jetBrainsMono(
-                color: const Color(0xFF00E5A0), fontSize: 13))),
+                color: _accent, fontSize: 13))),
               IconButton(icon: const Icon(Icons.close, size: 20),
                 onPressed: () => Navigator.pop(_)),
             ]),
@@ -372,6 +374,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   @override
   Widget build(BuildContext context) {
     _brightness = Theme.of(context).brightness;
+    _accent = Theme.of(context).extension<AppColors>()?.accent ?? const Color(0xFF00E5A0);
     final textPrimary = _isDark ? const Color(0xFFE2E8F5) : const Color(0xFF1A202C);
     final textSub = _isDark ? const Color(0xFF6B7A99) : const Color(0xFF4A5568);
 
@@ -416,7 +419,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
                       border: Border.all(color: _brd),
                     ),
                     child: Row(children: [
-                      Icon(Icons.folder_rounded, color: const Color(0xFF00E5A0), size: 14),
+                      Icon(Icons.folder_rounded, color: _accent, size: 14),
                       const SizedBox(width: 6),
                       Expanded(child: Text(_cwd,
                         style: GoogleFonts.jetBrainsMono(
@@ -434,7 +437,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       // Transfer progress overlay
       body: Stack(children: [
         _loading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5A0)))
+          ? Center(child: CircularProgressIndicator(color: _accent))
           : _error != null
             ? _buildError()
             : _entries.isEmpty
@@ -467,7 +470,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
       floatingActionButton: FloatingActionButton(
         mini: true,
-        backgroundColor: AppTheme.primary,
+        backgroundColor: _accent,
         onPressed: _mkdir,
         child: const Icon(Icons.create_new_folder_rounded, size: 20),
       ),
@@ -521,7 +524,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
   Widget _buildEmpty() => Center(child: Column(mainAxisSize: MainAxisSize.min, children: [
     Icon(Icons.folder_open_rounded, color: Colors.white24, size: 48),
     const SizedBox(height: 12),
-    Text('Folder kosong', style: TextStyle(color: Colors.white38)),
+    Text('Empty folder', style: TextStyle(color: Colors.white38)),
   ]));
 }
 
@@ -549,7 +552,7 @@ class _EntryRow extends StatelessWidget {
       color: tileBg,
       child: InkWell(
         onTap: onTap,
-        splashColor: AppTheme.terminal.withOpacity(0.08),
+        splashColor: _accent.withOpacity(0.08),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal:12, vertical:9),
           child: Row(children: [
@@ -558,13 +561,13 @@ class _EntryRow extends StatelessWidget {
               width: 36, height: 36,
               decoration: BoxDecoration(
                 color: entry.isDir
-                  ? AppTheme.terminal.withOpacity(0.1)
+                  ? _accent.withOpacity(0.1)
                   : Colors.white.withOpacity(0.05),
                 borderRadius: BorderRadius.circular(8),
               ),
               child: Icon(
                 entry.isDir ? Icons.folder_rounded : _icon(entry.name),
-                color: entry.isDir ? AppTheme.terminal : Colors.white38,
+                color: entry.isDir ? _accent : Colors.white38,
                 size: 20,
               ),
             ),
@@ -614,7 +617,7 @@ class _EntryRow extends StatelessWidget {
                 if (!entry.isDir)
                   const PopupMenuItem(value:'download',
                     child: Row(children:[
-                      Icon(Icons.download_rounded, size:16, color:AppTheme.primary),
+                      Icon(Icons.download_rounded, size:16, color:_accent),
                       SizedBox(width:8), Text('Download'),
                     ])),
                 const PopupMenuItem(value:'rename',
