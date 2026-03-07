@@ -19,23 +19,30 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    final raw = await ssh.run('''
+    final raw = await ssh.run(r'''
 echo "=F="; nvram get qos_enable 2>/dev/null || echo ""
 echo "=F="; nvram get qos_type 2>/dev/null || echo ""
 echo "=F="; nvram get qos_default 2>/dev/null || echo ""
 echo "=F="; nvram get qos_obw 2>/dev/null || echo ""
 echo "=F="; nvram get qos_ibw 2>/dev/null || echo ""
+echo "=F="; nvram get qos_cmode 2>/dev/null || echo ""
+echo "=F="; nvram get qos_bwcap 2>/dev/null || echo ""
 ''');
-    // Split by =F= sentinel to get values reliably
     final parts = raw.split('=F=').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
-    // Each part: "value" (the line after =F=), skip empty
     final vals = parts.map((p) => p.split('\n').where((l) => l.isNotEmpty).lastOrNull?.trim() ?? '').toList();
+    // FreshTomato qos_type: 0=HTB, 3=CAKE AQM (qos_type=3 means CAKE)
+    // Some builds use qos_type=1 for CAKE - we detect by checking value
+    final rawType = vals.length > 1 ? vals[1] : '0';
+    // Normalize: treat 3 as CAKE
+    final type = rawType;
     return {
       'enable':  vals.length > 0 ? vals[0] : '0',
-      'type':    vals.length > 1 ? vals[1] : '0',
+      'type':    type,
       'default': vals.length > 2 ? vals[2] : '-',
       'obw':     vals.length > 3 ? vals[3] : '-',
       'ibw':     vals.length > 4 ? vals[4] : '-',
+      'cmode':   vals.length > 5 ? vals[5] : '0',
+      'bwcap':   vals.length > 6 ? vals[6] : '0',
     };
   } catch (_) { return {}; }
 });
@@ -68,67 +75,107 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
     // Parse class names (space separated: "Highest High Medium Low ...")
     final classNames = classStr.trim().isEmpty ? <String>[] : classStr.trim().split(RegExp(r'\s+'));
     
-    // FreshTomato qos_orules: rules delimited by ">", fields by "<"
-    // Format: prio<src_ip<dst_ip<proto<src_port<dst_port<desc
-    // proto: 0=any, 6=tcp, 17=udp, 1=icmp (numeric)
-    final protoMap = {'0':'any','6':'tcp','17':'udp','1':'icmp','58':'icmpv6'};
+    // FreshTomato qos_orules ACTUAL format (from FreshTomato source qos.c):
+    // Each rule fields (0-indexed):
+    //   [0] addr1 (src ip/mask or empty)
+    //   [1] addr2 (dst ip/mask or empty)
+    //   [2] proto  (0=any, 6=tcp, 17=udp, 256=tcp+udp)
+    //   [3] port1  (dst port start, or "any")
+    //   [4] port2  (dst port end)
+    //   [5] kbytes1 (transferred from, kB)
+    //   [6] kbytes2 (transferred to, kB)
+    //   [7] prio   (1-8 class priority)
+    //   [8] ipp2p  (p2p detection flag)
+    //   [9] layer7 (l7 pattern)
+    //   [10] desc  (human-readable description)
+    //   [11] enable (1/0)
+    // Rules separated by ">"
+    final protoMap = {'0':'Any','6':'TCP','17':'UDP','256':'TCP/UDP','1':'ICMP'};
+    // Also FreshTomato class priority names (default)
+    const defaultClassNames = ['Service','VOIP/Game','Remote','WWW','Media','HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
+    
     int ruleIdx = 0;
     for (final chunk in rulesStr.split('>')) {
       final trimmed = chunk.trim();
       if (trimmed.isEmpty) continue;
       ruleIdx++;
       final parts = trimmed.split('<');
+      if (parts.length < 3) continue;
+
+      // Try the FreshTomato 11-field format first
+      String src='', dst='', proto='Any', port1='', port2='', kb1='', kb2='', prio='5', desc='';
       
-      // Try to parse: fields can vary, find prio (numeric 0-7) and desc (last text field)
-      String prio = '5', src = '', dst = '', proto = 'any', sport = '', dport = '', desc = '';
-      
-      if (parts.isNotEmpty) {
-        // Field[0] is prio if numeric, else it's proto name
+      if (parts.length >= 8) {
+        // Standard FreshTomato format
+        src   = parts[0].trim();
+        dst   = parts[1].trim();
+        final protoRaw = parts[2].trim();
+        proto = protoMap[protoRaw] ?? (protoRaw.isEmpty ? 'Any' : protoRaw);
+        port1 = parts.length > 3 ? parts[3].trim() : '';
+        port2 = parts.length > 4 ? parts[4].trim() : '';
+        kb1   = parts.length > 5 ? parts[5].trim() : '';
+        kb2   = parts.length > 6 ? parts[6].trim() : '';
+        prio  = parts.length > 7 ? parts[7].trim() : '5';
+        // ipp2p = parts[8], layer7 = parts[9]
+        desc  = parts.length > 10 ? parts[10].trim() : '';
+      } else {
+        // Fallback: shorter format - try to detect prio vs proto in field[0]
         final f0 = parts[0].trim();
-        if (int.tryParse(f0) != null && int.parse(f0) <= 10) {
-          // Standard format: prio<src<dst<proto<sport<dport<desc
+        final f0num = int.tryParse(f0);
+        if (f0num != null && f0num <= 10) {
+          // prio<src<dst<proto<sport<dport<desc
           prio  = f0;
           src   = parts.length > 1 ? parts[1].trim() : '';
           dst   = parts.length > 2 ? parts[2].trim() : '';
-          final protoRaw = parts.length > 3 ? parts[3].trim() : '0';
-          proto = protoMap[protoRaw] ?? (protoRaw.isEmpty ? 'any' : protoRaw);
-          sport = parts.length > 4 ? parts[4].trim() : '';
-          dport = parts.length > 5 ? parts[5].trim() : '';
-          // desc is last non-empty field after index 5
+          final pr = parts.length > 3 ? parts[3].trim() : '0';
+          proto = protoMap[pr] ?? (pr.isEmpty ? 'Any' : pr);
+          port1 = parts.length > 4 ? parts[4].trim() : '';
+          port2 = parts.length > 5 ? parts[5].trim() : '';
           for (int i = 6; i < parts.length; i++) {
             final p = parts[i].trim();
-            if (p.isNotEmpty) { desc = p; break; }
+            if (p.isNotEmpty && int.tryParse(p) == null) { desc = p; break; }
           }
         } else {
-          // Alt format: proto<desc<src<dst<sport<dport<prio
           proto = protoMap[f0] ?? f0;
           desc  = parts.length > 1 ? parts[1].trim() : '';
-          src   = parts.length > 2 ? parts[2].trim() : '';
-          dst   = parts.length > 3 ? parts[3].trim() : '';
-          sport = parts.length > 4 ? parts[4].trim() : '';
-          dport = parts.length > 5 ? parts[5].trim() : '';
-          final lastPrio = parts.length > 6 ? parts[6].trim() : '';
-          prio  = int.tryParse(lastPrio) != null ? lastPrio : '5';
+          port1 = parts.length > 3 ? parts[3].trim() : '';
+          final lp = parts.length > 6 ? parts[6].trim() : '';
+          prio  = int.tryParse(lp) != null ? lp : '5';
         }
       }
       
-      // Resolve class name from prio index
-      final prioIdx = (int.tryParse(prio) ?? 5) - 1;
-      final className = (prioIdx >= 0 && prioIdx < classNames.length) ? classNames[prioIdx] : '';
-      
-      // Build label: prefer desc, then class name, then numbered
-      final label = desc.isNotEmpty ? desc 
+      // Resolve class name from prio
+      final prioNum = int.tryParse(prio) ?? 5;
+      final prioIdx = prioNum - 1;
+      final className = (prioIdx >= 0 && prioIdx < classNames.length)
+          ? classNames[prioIdx]
+          : (prioIdx >= 0 && prioIdx < defaultClassNames.length ? defaultClassNames[prioIdx] : '');
+
+      // Ports display
+      String portDisplay = 'Any';
+      if (port1.isNotEmpty && port1 != '0') {
+        portDisplay = port2.isNotEmpty && port2 != '0' && port2 != port1
+            ? '$port1-$port2' : port1;
+      }
+
+      // kB transferred range
+      String xferDisplay = '';
+      if (kb1.isNotEmpty || kb2.isNotEmpty) {
+        final k1 = kb1.isEmpty || kb1 == '0' ? '0' : kb1;
+        final k2 = kb2.isEmpty || kb2 == '-1' ? '' : kb2;
+        if (k2.isNotEmpty) xferDisplay = '${k1}-${k2} kB';
+      }
+
+      // Build label
+      final label = desc.isNotEmpty ? desc
           : (className.isNotEmpty ? className : 'Rule $ruleIdx');
-      
-      // Format port display
-      final portDisplay = dport.isNotEmpty && dport != '0' ? dport 
-          : (sport.isNotEmpty && sport != '0' ? sport : 'any');
-      
+
       rules.add({
         'prio': prio, 'src': src, 'dst': dst,
-        'proto': proto, 'srcport': sport, 'dstport': dport,
-        'desc': label, 'className': className,
-        'portDisplay': portDisplay,
+        'proto': proto, 'srcport': port1, 'dstport': port1,
+        'port1': port1, 'port2': port2,
+        'portDisplay': portDisplay, 'xferDisplay': xferDisplay,
+        'desc': label, 'rawDesc': desc, 'className': className,
       });
     }
     return rules;
@@ -150,21 +197,42 @@ final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((r
     final result = <Map<String, String>>[];
     for (final line in raw.split('\n')) {
       if (line.trim().isEmpty) continue;
-      final proto = RegExp(r'^\w+').firstMatch(line)?.group(0) ?? '?';
-      final srcs  = RegExp(r'src=(\S+)').allMatches(line).toList();
-      final dsts  = RegExp(r'dst=(\S+)').allMatches(line).toList();
+      // nf_conntrack line format:
+      // ipv4 2 tcp 6 430 ESTABLISHED src=1.2.3.4 dst=5.6.7.8 sport=12345 dport=443 ...
+      final proto = RegExp(r'\b(tcp|udp|icmp)\b').firstMatch(line)?.group(1)?.toLowerCase() ?? '';
+      if (proto.isEmpty) continue;
+      
+      // Extract all src/dst/sport/dport - take first pair (outbound)
+      final srcs  = RegExp(r'src=([\d\.]+)').allMatches(line).toList();
+      final dsts  = RegExp(r'dst=([\d\.]+)').allMatches(line).toList();
       final sp    = RegExp(r'sport=(\d+)').allMatches(line).toList();
       final dp    = RegExp(r'dport=(\d+)').allMatches(line).toList();
-      final bytes = RegExp(r'bytes=(\d+)').allMatches(line).toList();
+      
+      final src = srcs.isNotEmpty ? srcs[0].group(1)! : '-';
+      final dst = dsts.isNotEmpty ? dsts[0].group(1)! : '-';
+      // Skip pure loopback
+      if (src.startsWith('127.') && dst.startsWith('127.')) continue;
+      
+      // State info
+      final stateMatch = RegExp(r'\b(ESTABLISHED|SYN_SENT|TIME_WAIT|CLOSE_WAIT|FIN_WAIT)\b').firstMatch(line);
+      final state = stateMatch?.group(1) ?? '';
+      
       result.add({
         'proto': proto,
-        'src':   srcs.isNotEmpty ? srcs[0].group(1)! : '-',
-        'dst':   dsts.isNotEmpty ? dsts[0].group(1)! : '-',
-        'sport': sp.isNotEmpty   ? sp[0].group(1)!   : '-',
-        'dport': dp.isNotEmpty   ? dp[0].group(1)!   : '-',
-        'bytes': bytes.isNotEmpty ? bytes[0].group(1)! : '0',
+        'src':   src,
+        'dst':   dst,
+        'sport': sp.isNotEmpty ? sp[0].group(1)! : '-',
+        'dport': dp.isNotEmpty ? dp[0].group(1)! : '-',
+        'state': state,
       });
     }
+    // Sort: ESTABLISHED first, then by protocol
+    result.sort((a, b) {
+      final aE = a['state'] == 'ESTABLISHED' ? 0 : 1;
+      final bE = b['state'] == 'ESTABLISHED' ? 0 : 1;
+      if (aE != bE) return aE - bE;
+      return a['proto']!.compareTo(b['proto']!);
+    });
     return result;
   } catch (_) { return []; }
 });
@@ -741,6 +809,7 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     required String obw,
     required String ibw,
     required String defaultClass,
+    String cmode = '0',
   }) async {
     final ssh = ref.read(sshServiceProvider);
     setState(() { _saving = true; _saveMsg = null; });
@@ -748,9 +817,10 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
       final cmds = [
         'nvram set qos_enable=${enabled ? 1 : 0}',
         'nvram set qos_type=$type',
-        'nvram set qos_default=$defaultClass',
-        'nvram set qos_obw=$obw',
-        'nvram set qos_ibw=$ibw',
+        if (type == '0' && defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
+        if (type == '3') 'nvram set qos_cmode=$cmode',
+        if (obw.isNotEmpty) 'nvram set qos_obw=$obw',
+        if (ibw.isNotEmpty) 'nvram set qos_ibw=$ibw',
         'nvram commit',
         'service qos restart 2>/dev/null || true',
       ].join(' && ');
@@ -865,7 +935,15 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final basic  = ref.watch(qosBasicProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
-    final modeMap = {'0': 'HTB (classic)', '1': 'HFSC', '2': 'HFSC (alt)', '3': 'CAKE AQM'};
+    // FreshTomato: 0=HTB, 3=CAKE AQM
+    final modeMap = {'0': 'HTB (classic)', '3': 'CAKE AQM'};
+    final cakeModeMap = {
+      '0': 'Single class [besteffort]',
+      '1': '8 priority [diffserv8]',
+      '2': '4 priority [diffserv4]',
+      '3': '3 priority [diffserv3]',
+      '4': '8 priority [precedence]',
+    };
 
     return basic.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -910,15 +988,23 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
                   label: 'QoS Enabled',
                   value: enabled ? 'Enabled' : 'Disabled',
                   valueColor: enabled ? AppTheme.success : AppTheme.danger),
-              _QRow(label: 'Mode', value: modeMap[d['type'] ?? ''] ?? 'Unknown'),
-              _QRow(label: 'Default Class', value: d['default'] ?? '-'),
+              _QRow(
+                  label: 'Mode',
+                  value: modeMap[d['type'] ?? ''] ?? 'HTB (classic)'),
+              // HTB: show default class
+              if ((d['type'] ?? '0') == '0')
+                _QRow(label: 'Default Class', value: d['default']?.isNotEmpty == true ? d['default']! : '-'),
+              // CAKE: show cake mode
+              if ((d['type'] ?? '0') == '3')
+                _QRow(label: 'CAKE Mode',
+                  value: cakeModeMap[d['cmode'] ?? ''] ?? 'Single class'),
               _QRow(
                   label: 'Upload Limit',
-                  value: '${d['obw'] ?? '-'} kbit/s',
+                  value: (d['obw']?.isNotEmpty == true && d['obw'] != '-') ? '${d['obw']} kbit/s' : '- kbit/s',
                   valueColor: accent),
               _QRow(
                   label: 'Download Limit',
-                  value: '${d['ibw'] ?? '-'} kbit/s',
+                  value: (d['ibw']?.isNotEmpty == true && d['ibw'] != '-') ? '${d['ibw']} kbit/s' : '- kbit/s',
                   valueColor: accent),
             ]),
           ),
@@ -942,8 +1028,19 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     final ssh = ref.read(sshServiceProvider);
     setState(() => _saving = true);
     try {
-      final encoded = rules.map((r) =>
-        '${r['prio']}<${r['src']}<${r['dst']}<${r['proto']}<${r['srcport']}<${r['dstport']}<${r['desc']}>').join('');
+      final encoded = rules.map((r) {
+        final protoNum = r['proto'] ?? '0';
+        final p1 = r['port1'] ?? r['srcport'] ?? '0';
+        final p2 = r['port2'] ?? r['dstport'] ?? p1;
+        final kb1 = r['kb1'] ?? '0';
+        final kb2 = r['kb2'] ?? '0';
+        final prio = r['prio'] ?? '5';
+        final src = r['src'] ?? '';
+        final dst = r['dst'] ?? '';
+        final desc = r['rawDesc'] ?? r['desc'] ?? '';
+        // FreshTomato format: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable
+        return '$src<$dst<$protoNum<$p1<$p2<$kb1<$kb2<$prio<0<0<$desc<1>';
+      }).join('>');
       await ssh.run("nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true");
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
@@ -958,15 +1055,31 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
     final isEdit = existing != null;
 
-    String prio     = existing?['prio']    ?? '5';
-    String proto    = existing?['proto']   ?? 'any';
-    String srcport  = existing?['srcport'] ?? '';
-    String dstport  = existing?['dstport'] ?? '';
-    String desc     = existing?['desc']    ?? '';
+    // FreshTomato class priority names
+    const classNames = ['Service','VOIP/Game','Remote','WWW','Media','HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
 
-    final descCtrl    = TextEditingController(text: desc);
-    final srcportCtrl = TextEditingController(text: srcport);
-    final dstportCtrl = TextEditingController(text: dstport);
+    String prio   = existing?['prio']  ?? '5';
+    // proto stored as display string like 'TCP', 'UDP', 'Any', 'TCP/UDP'
+    String proto  = existing?['proto'] ?? 'Any';
+    // Normalize to dropdown values
+    if (!['Any','TCP','UDP','TCP/UDP','ICMP'].contains(proto)) proto = 'Any';
+    String port1  = existing?['port1'] ?? existing?['srcport'] ?? '';
+    String port2  = existing?['port2'] ?? existing?['dstport'] ?? '';
+    String src    = existing?['src']   ?? '';
+    String dst    = existing?['dst']   ?? '';
+    String desc   = existing?['rawDesc'] ?? existing?['desc'] ?? '';
+    // Clear auto-generated desc like "Rule N"
+    if (desc.startsWith('Rule ') && int.tryParse(desc.split(' ').last) != null) desc = '';
+    String kb1    = '';
+    String kb2    = '';
+
+    final descCtrl  = TextEditingController(text: desc);
+    final port1Ctrl = TextEditingController(text: port1);
+    final port2Ctrl = TextEditingController(text: port2);
+    final srcCtrl   = TextEditingController(text: src);
+    final dstCtrl   = TextEditingController(text: dst);
+    final kb1Ctrl   = TextEditingController(text: kb1);
+    final kb2Ctrl   = TextEditingController(text: kb2);
 
     showDialog(
       context: ctx,
@@ -976,28 +1089,25 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
           title: Text(isEdit ? 'Edit Rule' : 'Add Rule'),
           content: SingleChildScrollView(
             child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Description
               TextField(
                 controller: descCtrl,
                 decoration: const InputDecoration(
                   labelText: 'Description',
                   border: OutlineInputBorder(),
-                  hintText: 'e.g. YouTube, Gaming',
+                  hintText: 'e.g. DNS, General Gaming',
                 ),
               ),
               const SizedBox(height: 12),
-              // Priority
+              // Priority (class)
               DropdownButtonFormField<String>(
                 value: prio,
-                decoration: const InputDecoration(labelText: 'Priority', border: OutlineInputBorder()),
-                items: const [
-                  DropdownMenuItem(value: '1', child: Text('P1 - Highest')),
-                  DropdownMenuItem(value: '2', child: Text('P2 - High')),
-                  DropdownMenuItem(value: '3', child: Text('P3 - Medium-High')),
-                  DropdownMenuItem(value: '4', child: Text('P4 - Medium')),
-                  DropdownMenuItem(value: '5', child: Text('P5 - Standard')),
-                  DropdownMenuItem(value: '6', child: Text('P6 - Low')),
-                  DropdownMenuItem(value: '7', child: Text('P7 - Lowest')),
-                ],
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'Class / Priority', border: OutlineInputBorder()),
+                items: List.generate(classNames.length, (i) =>
+                  DropdownMenuItem(value: '${i+1}',
+                    child: Text('Priority ${i+1} - ${classNames[i]}',
+                      style: const TextStyle(fontSize: 13)))),
                 onChanged: (v) => setS(() => prio = v ?? '5'),
               ),
               const SizedBox(height: 12),
@@ -1006,33 +1116,73 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                 value: proto,
                 decoration: const InputDecoration(labelText: 'Protocol', border: OutlineInputBorder()),
                 items: const [
-                  DropdownMenuItem(value: 'any',  child: Text('Any')),
-                  DropdownMenuItem(value: 'tcp',  child: Text('TCP')),
-                  DropdownMenuItem(value: 'udp',  child: Text('UDP')),
-                  DropdownMenuItem(value: 'icmp', child: Text('ICMP')),
+                  DropdownMenuItem(value: 'Any',     child: Text('Any')),
+                  DropdownMenuItem(value: 'TCP',     child: Text('TCP')),
+                  DropdownMenuItem(value: 'UDP',     child: Text('UDP')),
+                  DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP')),
+                  DropdownMenuItem(value: 'ICMP',    child: Text('ICMP')),
                 ],
-                onChanged: (v) => setS(() => proto = v ?? 'any'),
+                onChanged: (v) => setS(() => proto = v ?? 'Any'),
               ),
               const SizedBox(height: 12),
+              // Dst Port range (most common match)
+              Text('Destination Port Range', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<AppColors>()!.textSecondary)),
+              const SizedBox(height: 6),
               Row(children: [
                 Expanded(child: TextField(
-                  controller: srcportCtrl,
+                  controller: port1Ctrl,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
-                    labelText: 'Src Port',
-                    border: OutlineInputBorder(),
-                    hintText: 'e.g. 80',
-                  ),
+                    labelText: 'From', border: OutlineInputBorder(), hintText: 'e.g. 53'),
                 )),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
+                const Text('-'),
+                const SizedBox(width: 8),
                 Expanded(child: TextField(
-                  controller: dstportCtrl,
+                  controller: port2Ctrl,
                   keyboardType: TextInputType.number,
                   decoration: const InputDecoration(
-                    labelText: 'Dst Port',
-                    border: OutlineInputBorder(),
-                    hintText: 'e.g. 443',
-                  ),
+                    labelText: 'To', border: OutlineInputBorder(), hintText: 'e.g. 53'),
+                )),
+              ]),
+              const SizedBox(height: 12),
+              // Src/Dst Address (optional)
+              TextField(
+                controller: srcCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Src Address (optional)',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. 192.168.1.0/24',
+                ),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: dstCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Dst Address (optional)',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. 0.0.0.0/0',
+                ),
+              ),
+              const SizedBox(height: 12),
+              // KB Transferred range
+              Text('Transferred (kB, optional)', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<AppColors>()!.textSecondary)),
+              const SizedBox(height: 6),
+              Row(children: [
+                Expanded(child: TextField(
+                  controller: kb1Ctrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'From kB', border: OutlineInputBorder(), hintText: '0'),
+                )),
+                const SizedBox(width: 8),
+                const Text('-'),
+                const SizedBox(width: 8),
+                Expanded(child: TextField(
+                  controller: kb2Ctrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'To kB', border: OutlineInputBorder(), hintText: '0'),
                 )),
               ]),
             ]),
@@ -1043,12 +1193,18 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
               style: ElevatedButton.styleFrom(backgroundColor: accent),
               onPressed: () {
                 Navigator.pop(dCtx);
+                // Encode proto back to numeric for FreshTomato
+                final protoNum = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'}[proto] ?? '0';
+                final p1 = port1Ctrl.text.trim();
+                final p2 = port2Ctrl.text.isEmpty ? p1 : port2Ctrl.text.trim();
                 final newRule = <String, String>{
-                  'prio': prio, 'src': '', 'dst': '',
-                  'proto': proto,
-                  'srcport': srcportCtrl.text.trim(),
-                  'dstport': dstportCtrl.text.trim(),
+                  'prio': prio, 'src': srcCtrl.text.trim(), 'dst': dstCtrl.text.trim(),
+                  'proto': protoNum,
+                  'srcport': p1, 'dstport': p2,
+                  'port1': p1, 'port2': p2,
+                  'kb1': kb1Ctrl.text.trim(), 'kb2': kb2Ctrl.text.trim(),
                   'desc': descCtrl.text.trim(),
+                  'rawDesc': descCtrl.text.trim(),
                 };
                 final updated = List<Map<String, String>>.from(allRules);
                 if (isEdit && index != null) {
@@ -1124,25 +1280,39 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                   final r     = list[i];
                   final prio  = r['prio'] ?? '5';
                   final color = prioColors[prio] ?? accent;
+                  final portInfo = r['portDisplay']?.isNotEmpty == true && r['portDisplay'] != 'Any'
+                      ? 'Port: ${r['portDisplay']}' : '';
+                  final xferInfo = r['xferDisplay']?.isNotEmpty == true ? r['xferDisplay']! : '';
+                  final subtitle = [r['proto'] ?? 'Any', if (portInfo.isNotEmpty) portInfo, if (xferInfo.isNotEmpty) xferInfo]
+                      .join(' | ');
+                  final className = r['className'] ?? '';
+
                   return AppCard(
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     child: Row(children: [
+                      // Priority badge
                       Container(
-                        width: 36, height: 36,
+                        width: 40, height: 40,
                         decoration: BoxDecoration(
                             color: color.withOpacity(0.15),
                             borderRadius: BorderRadius.circular(10)),
-                        child: Center(child: Text('P$prio',
-                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color))),
+                        child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                          Text('P$prio', style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: color)),
+                          if (className.isNotEmpty)
+                            Text(className, style: TextStyle(fontSize: 8, color: color.withOpacity(0.8)),
+                                maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ])),
                       ),
                       const SizedBox(width: 10),
+                      // Description + subtitle
                       Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                         Text(r['desc']!.isNotEmpty ? r['desc']! : 'Rule ${i + 1}',
                             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textPrimary)),
-                        Text('${r['proto']} | port: ${r['dstport']!.isNotEmpty ? r['dstport'] : 'any'}',
+                        const SizedBox(height: 2),
+                        Text(subtitle,
                             style: TextStyle(fontSize: 11, color: c.textMuted)),
                       ])),
-                      // Edit & delete buttons
+                      // Edit & delete
                       IconButton(
                         icon: Icon(Icons.edit_outlined, size: 18, color: accent),
                         onPressed: () => _showRuleDialog(context, list, existing: r, index: i),
@@ -1223,27 +1393,20 @@ class _QosConnectionsTabState extends ConsumerState<_QosConnectionsTab> {
             color: Theme.of(context).colorScheme.surface,
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(children: [
-              SizedBox(
-                  width: 44,
-                  child: Text('Proto',
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: c.textMuted,
-                          fontWeight: FontWeight.w600))),
-              Expanded(
-                  child: Text('Source',
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: c.textMuted,
-                          fontWeight: FontWeight.w600))),
-              Expanded(
-                  child: Text('Destination',
-                      style: TextStyle(
-                          fontSize: 10,
-                          color: c.textMuted,
-                          fontWeight: FontWeight.w600))),
+              SizedBox(width: 48, child: Text('Proto',
+                  style: TextStyle(fontSize: 10, color: c.textMuted, fontWeight: FontWeight.w600))),
+              Expanded(flex: 3, child: Text('Source -> Destination',
+                  style: TextStyle(fontSize: 10, color: c.textMuted, fontWeight: FontWeight.w600))),
+              SizedBox(width: 70, child: Text('State',
+                  style: TextStyle(fontSize: 10, color: c.textMuted, fontWeight: FontWeight.w600))),
             ]),
           ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+            child: Text('${list.length} connections',
+              style: TextStyle(fontSize: 10, color: accent, fontWeight: FontWeight.w600)),
+          ),
+          const SizedBox(height: 4),
           Expanded(
             child: ListView.separated(
               padding: EdgeInsets.zero,
@@ -1253,32 +1416,40 @@ class _QosConnectionsTabState extends ConsumerState<_QosConnectionsTab> {
                 final conn  = list[i];
                 final isTcp = conn['proto'] == 'tcp';
                 final color = isTcp ? accent : AppTheme.secondary;
+                final state = conn['state'] ?? '';
+                final stateColor = state == 'ESTABLISHED' ? AppTheme.success
+                    : state.contains('WAIT') ? AppTheme.warning : c.textMuted;
                 return Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   child: Row(children: [
                     SizedBox(
-                      width: 44,
+                      width: 48,
                       child: Container(
                         padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                         decoration: BoxDecoration(
                             color: color.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(4)),
                         child: Text(conn['proto']!.toUpperCase(),
-                            style: TextStyle(
-                                fontSize: 9,
-                                fontWeight: FontWeight.w700,
-                                color: color),
+                            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: color),
                             textAlign: TextAlign.center),
                       ),
                     ),
-                    Expanded(
-                        child: Text('${conn['src']}:${conn['sport']}',
+                    Expanded(flex: 3, child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${conn['src']}:${conn['sport']}',
                             style: TextStyle(fontSize: 10, color: c.textPrimary),
-                            overflow: TextOverflow.ellipsis)),
-                    Expanded(
-                        child: Text('${conn['dst']}:${conn['dport']}',
+                            overflow: TextOverflow.ellipsis),
+                        Text('-> ${conn['dst']}:${conn['dport']}',
                             style: TextStyle(fontSize: 10, color: c.textSecondary),
-                            overflow: TextOverflow.ellipsis)),
+                            overflow: TextOverflow.ellipsis),
+                      ],
+                    )),
+                    SizedBox(width: 70, child: Text(
+                      state.isNotEmpty ? state.replaceAll('_', ' ') : '-',
+                      style: TextStyle(fontSize: 9, color: stateColor, fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis,
+                    )),
                   ]),
                 );
               },

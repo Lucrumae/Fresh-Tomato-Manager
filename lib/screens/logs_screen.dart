@@ -106,8 +106,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
                   _Chip(label: 'All', value: 'all', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: '? Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: '? Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: 'Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: 'Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
                 ]),
               ),
             ]),
@@ -126,6 +126,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               ],
             ))
           : ListView.separated(
+              controller: _scrollCtrl,
               padding: const EdgeInsets.all(16),
               itemCount: filtered.length,
               separatorBuilder: (_, __) => const Divider(height: 1),
