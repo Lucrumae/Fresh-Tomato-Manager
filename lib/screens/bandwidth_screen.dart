@@ -633,11 +633,143 @@ class _QosFullPageState extends ConsumerState<_QosFullPage> {
 // =============================================================================
 // QoS tab widgets
 // =============================================================================
-class _QosBasicTab extends ConsumerWidget {
+class _QosBasicTab extends ConsumerStatefulWidget {
   const _QosBasicTab({super.key});
+  @override
+  ConsumerState<_QosBasicTab> createState() => _QosBasicTabState();
+}
+
+class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
+  bool _saving = false;
+  String? _saveMsg;
+
+  Future<void> _save(Map<String, String> current, {
+    required bool enabled,
+    required String type,
+    required String obw,
+    required String ibw,
+    required String defaultClass,
+  }) async {
+    final ssh = ref.read(sshServiceProvider);
+    setState(() { _saving = true; _saveMsg = null; });
+    try {
+      final cmds = [
+        'nvram set qos_enable=${enabled ? 1 : 0}',
+        'nvram set qos_type=$type',
+        'nvram set qos_default=$defaultClass',
+        'nvram set qos_obw=$obw',
+        'nvram set qos_ibw=$ibw',
+        'nvram commit',
+        'service qos restart 2>/dev/null || true',
+      ].join(' && ');
+      await ssh.run(cmds);
+      ref.invalidate(qosBasicProvider);
+      setState(() { _saveMsg = 'Saved!'; });
+    } catch (e) {
+      setState(() { _saveMsg = 'Error: $e'; });
+    } finally {
+      setState(() { _saving = false; });
+    }
+  }
+
+  void _showEditDialog(BuildContext ctx, Map<String, String> d) {
+    final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
+    bool enabled = (d['enable'] ?? '0') == '1';
+    String type  = d['type'] ?? '0';
+    String obw   = d['obw'] ?? '';
+    String ibw   = d['ibw'] ?? '';
+    String def   = d['default'] ?? 'Standard';
+    final obwCtrl = TextEditingController(text: obw);
+    final ibwCtrl = TextEditingController(text: ibw);
+    final defCtrl = TextEditingController(text: def);
+
+    showDialog(
+      context: ctx,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setS) => AlertDialog(
+          backgroundColor: Theme.of(ctx).colorScheme.surface,
+          title: const Text('QoS Settings'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              // Enable toggle
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                const Text('QoS Enabled'),
+                Switch(
+                  value: enabled,
+                  activeColor: accent,
+                  onChanged: (v) => setS(() => enabled = v),
+                ),
+              ]),
+              const SizedBox(height: 12),
+              // Mode dropdown
+              DropdownButtonFormField<String>(
+                value: type,
+                decoration: const InputDecoration(labelText: 'Mode', border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: '0', child: Text('HTB (classic)')),
+                  DropdownMenuItem(value: '1', child: Text('CAKE AQM')),
+                  DropdownMenuItem(value: '2', child: Text('HFSC')),
+                ],
+                onChanged: (v) => setS(() => type = v ?? '0'),
+              ),
+              const SizedBox(height: 12),
+              // Upload bandwidth
+              TextField(
+                controller: obwCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Upload Limit (kbit/s)',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. 10000',
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Download bandwidth
+              TextField(
+                controller: ibwCtrl,
+                keyboardType: TextInputType.number,
+                decoration: const InputDecoration(
+                  labelText: 'Download Limit (kbit/s)',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. 50000',
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Default class
+              TextField(
+                controller: defCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Default Class',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. Standard',
+                ),
+              ),
+            ]),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dCtx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: accent),
+              onPressed: () {
+                Navigator.pop(dCtx);
+                _save(d,
+                  enabled: enabled, type: type,
+                  obw: obwCtrl.text.trim(), ibw: ibwCtrl.text.trim(),
+                  defaultClass: defCtrl.text.trim());
+              },
+              child: const Text('Apply', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final basic  = ref.watch(qosBasicProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
@@ -649,8 +781,39 @@ class _QosBasicTab extends ConsumerWidget {
       data: (d) {
         final enabled = (d['enable'] ?? '0') == '1';
         return ListView(padding: const EdgeInsets.all(16), children: [
+          if (_saveMsg != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: _saveMsg!.startsWith('Error') ? AppTheme.danger.withOpacity(0.15) : AppTheme.success.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success),
+              ),
+              child: Row(children: [
+                Icon(_saveMsg!.startsWith('Error') ? Icons.error_outline : Icons.check_circle_outline,
+                  size: 16, color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success),
+                const SizedBox(width: 8),
+                Text(_saveMsg!, style: TextStyle(
+                  fontSize: 13,
+                  color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success)),
+              ]),
+            ),
           AppCard(
             child: Column(children: [
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Text('Basic Settings', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textPrimary)),
+                _saving
+                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                  : IconButton(
+                      icon: Icon(Icons.edit_rounded, size: 18, color: accent),
+                      onPressed: () => _showEditDialog(context, d),
+                      tooltip: 'Edit QoS settings',
+                      padding: EdgeInsets.zero,
+                      constraints: const BoxConstraints(),
+                    ),
+              ]),
+              const Divider(height: 16),
               _QRow(
                   label: 'QoS Enabled',
                   value: enabled ? 'Enabled' : 'Disabled',
@@ -673,85 +836,253 @@ class _QosBasicTab extends ConsumerWidget {
   }
 }
 
-class _QosClassifyTab extends ConsumerWidget {
+class _QosClassifyTab extends ConsumerStatefulWidget {
   const _QosClassifyTab({super.key});
+  @override
+  ConsumerState<_QosClassifyTab> createState() => _QosClassifyTabState();
+}
+
+class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
+  bool _saving = false;
+
+  // Serialize rules back to nvram qos_orules format: prio<src<dst<proto<srcport<dstport<desc>...
+  Future<void> _saveRules(List<Map<String, String>> rules) async {
+    final ssh = ref.read(sshServiceProvider);
+    setState(() => _saving = true);
+    try {
+      final encoded = rules.map((r) =>
+        '${r['prio']}<${r['src']}<${r['dst']}<${r['proto']}<${r['srcport']}<${r['dstport']}<${r['desc']}>').join('');
+      await ssh.run('nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true');
+      ref.invalidate(qosClassifyProvider);
+    } catch (e) {
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e'), backgroundColor: AppTheme.danger));
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  void _showRuleDialog(BuildContext ctx, List<Map<String, String>> allRules, {Map<String, String>? existing, int? index}) {
+    final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
+    final isEdit = existing != null;
+
+    String prio     = existing?['prio']    ?? '5';
+    String proto    = existing?['proto']   ?? 'any';
+    String srcport  = existing?['srcport'] ?? '';
+    String dstport  = existing?['dstport'] ?? '';
+    String desc     = existing?['desc']    ?? '';
+
+    final descCtrl    = TextEditingController(text: desc);
+    final srcportCtrl = TextEditingController(text: srcport);
+    final dstportCtrl = TextEditingController(text: dstport);
+
+    showDialog(
+      context: ctx,
+      builder: (dCtx) => StatefulBuilder(
+        builder: (dCtx, setS) => AlertDialog(
+          backgroundColor: Theme.of(ctx).colorScheme.surface,
+          title: Text(isEdit ? 'Edit Rule' : 'Add Rule'),
+          content: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              TextField(
+                controller: descCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Description',
+                  border: OutlineInputBorder(),
+                  hintText: 'e.g. YouTube, Gaming',
+                ),
+              ),
+              const SizedBox(height: 12),
+              // Priority
+              DropdownButtonFormField<String>(
+                value: prio,
+                decoration: const InputDecoration(labelText: 'Priority', border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: '1', child: Text('P1 - Highest')),
+                  DropdownMenuItem(value: '2', child: Text('P2 - High')),
+                  DropdownMenuItem(value: '3', child: Text('P3 - Medium-High')),
+                  DropdownMenuItem(value: '4', child: Text('P4 - Medium')),
+                  DropdownMenuItem(value: '5', child: Text('P5 - Standard')),
+                  DropdownMenuItem(value: '6', child: Text('P6 - Low')),
+                  DropdownMenuItem(value: '7', child: Text('P7 - Lowest')),
+                ],
+                onChanged: (v) => setS(() => prio = v ?? '5'),
+              ),
+              const SizedBox(height: 12),
+              // Protocol
+              DropdownButtonFormField<String>(
+                value: proto,
+                decoration: const InputDecoration(labelText: 'Protocol', border: OutlineInputBorder()),
+                items: const [
+                  DropdownMenuItem(value: 'any',  child: Text('Any')),
+                  DropdownMenuItem(value: 'tcp',  child: Text('TCP')),
+                  DropdownMenuItem(value: 'udp',  child: Text('UDP')),
+                  DropdownMenuItem(value: 'icmp', child: Text('ICMP')),
+                ],
+                onChanged: (v) => setS(() => proto = v ?? 'any'),
+              ),
+              const SizedBox(height: 12),
+              Row(children: [
+                Expanded(child: TextField(
+                  controller: srcportCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Src Port',
+                    border: OutlineInputBorder(),
+                    hintText: 'e.g. 80',
+                  ),
+                )),
+                const SizedBox(width: 10),
+                Expanded(child: TextField(
+                  controller: dstportCtrl,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Dst Port',
+                    border: OutlineInputBorder(),
+                    hintText: 'e.g. 443',
+                  ),
+                )),
+              ]),
+            ]),
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Cancel')),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(backgroundColor: accent),
+              onPressed: () {
+                Navigator.pop(dCtx);
+                final newRule = <String, String>{
+                  'prio': prio, 'src': '', 'dst': '',
+                  'proto': proto,
+                  'srcport': srcportCtrl.text.trim(),
+                  'dstport': dstportCtrl.text.trim(),
+                  'desc': descCtrl.text.trim(),
+                };
+                final updated = List<Map<String, String>>.from(allRules);
+                if (isEdit && index != null) {
+                  updated[index] = newRule;
+                } else {
+                  updated.add(newRule);
+                }
+                _saveRules(updated);
+              },
+              child: Text(isEdit ? 'Save' : 'Add', style: const TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _deleteRule(List<Map<String, String>> allRules, int index, BuildContext ctx) {
+    showDialog(
+      context: ctx,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(ctx).colorScheme.surface,
+        title: const Text('Delete Rule'),
+        content: Text('Delete rule "${allRules[index]['desc']?.isNotEmpty == true ? allRules[index]['desc'] : 'Rule ${index + 1}'}"?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: AppTheme.danger),
+            onPressed: () {
+              Navigator.pop(ctx);
+              final updated = List<Map<String, String>>.from(allRules)..removeAt(index);
+              _saveRules(updated);
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final rules  = ref.watch(qosClassifyProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
+
+    final prioColors = <String, Color>{
+      '1': AppTheme.danger,
+      '2': const Color(0xFFFF8C00),
+      '3': const Color(0xFFFFD700),
+      '4': AppTheme.success,
+      '5': accent,
+      '6': c.textSecondary,
+      '7': c.textMuted,
+    };
 
     return rules.when(
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
       data: (list) {
-        if (list.isEmpty) {
-          return Center(
-              child: Text('No QoS rules configured',
-                  style: TextStyle(color: c.textMuted)));
-        }
-        final prioColors = <String, Color>{
-          '1': AppTheme.danger,
-          '2': const Color(0xFFFF8C00),
-          '3': const Color(0xFFFFD700),
-          '4': AppTheme.success,
-          '5': accent,
-          '6': c.textSecondary,
-        };
-        return ListView.separated(
-          padding: const EdgeInsets.all(16),
-          itemCount: list.length,
-          separatorBuilder: (_, __) => const SizedBox(height: 8),
-          itemBuilder: (_, i) {
-            final r     = list[i];
-            final prio  = r['prio'] ?? '5';
-            final color = prioColors[prio] ?? accent;
-            return AppCard(
-              padding: const EdgeInsets.all(12),
-              child: Row(children: [
-                Container(
-                  width: 32, height: 32,
-                  decoration: BoxDecoration(
-                      color: color.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Center(
-                    child: Text('P$prio',
-                        style: TextStyle(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: color)),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    Text(
-                      r['desc']!.isNotEmpty ? r['desc']! : 'Rule ${i + 1}',
-                      style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: c.textPrimary),
-                    ),
-                    Text(
-                      '${r['proto']} | port: ${r['dstport']!.isNotEmpty ? r['dstport'] : 'any'}',
-                      style: TextStyle(fontSize: 11, color: c.textMuted),
-                    ),
-                  ]),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                      color: color.withOpacity(0.12),
-                      borderRadius: BorderRadius.circular(8)),
-                  child: Text('P$prio',
-                      style: TextStyle(
-                          fontSize: 10, color: color, fontWeight: FontWeight.w600)),
-                ),
-              ]),
-            );
-          },
-        );
+        return Stack(children: [
+          list.isEmpty
+            ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.rule_folder_outlined, size: 48, color: c.textMuted),
+                const SizedBox(height: 12),
+                Text('No QoS rules configured', style: TextStyle(color: c.textMuted)),
+              ]))
+            : ListView.separated(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                itemBuilder: (_, i) {
+                  final r     = list[i];
+                  final prio  = r['prio'] ?? '5';
+                  final color = prioColors[prio] ?? accent;
+                  return AppCard(
+                    padding: const EdgeInsets.all(12),
+                    child: Row(children: [
+                      Container(
+                        width: 36, height: 36,
+                        decoration: BoxDecoration(
+                            color: color.withOpacity(0.15),
+                            borderRadius: BorderRadius.circular(10)),
+                        child: Center(child: Text('P$prio',
+                            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: color))),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(r['desc']!.isNotEmpty ? r['desc']! : 'Rule ${i + 1}',
+                            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: c.textPrimary)),
+                        Text('${r['proto']} | port: ${r['dstport']!.isNotEmpty ? r['dstport'] : 'any'}',
+                            style: TextStyle(fontSize: 11, color: c.textMuted)),
+                      ])),
+                      // Edit & delete buttons
+                      IconButton(
+                        icon: Icon(Icons.edit_outlined, size: 18, color: accent),
+                        onPressed: () => _showRuleDialog(context, list, existing: r, index: i),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                      const SizedBox(width: 2),
+                      IconButton(
+                        icon: Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
+                        onPressed: () => _deleteRule(list, i, context),
+                        padding: const EdgeInsets.all(4),
+                        constraints: const BoxConstraints(),
+                      ),
+                    ]),
+                  );
+                },
+              ),
+          // FAB for adding rule
+          Positioned(
+            right: 16, bottom: 16,
+            child: FloatingActionButton.extended(
+              heroTag: 'addRule',
+              backgroundColor: accent,
+              onPressed: _saving ? null : () => _showRuleDialog(context, list),
+              icon: _saving
+                ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Icon(Icons.add, color: Colors.white),
+              label: Text(_saving ? 'Saving...' : 'Add Rule',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+            ),
+          ),
+        ]);
       },
     );
   }
