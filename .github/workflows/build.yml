@@ -27,7 +27,6 @@ jobs:
           rm -rf /tmp/scaffold/lib
           cp -r lib /tmp/scaffold/lib
           cp pubspec.yaml /tmp/scaffold/pubspec.yaml
-          # Android customizations
           cp android/app/src/main/AndroidManifest.xml \
              /tmp/scaffold/android/app/src/main/AndroidManifest.xml
           mkdir -p /tmp/scaffold/android/app/src/main/res/xml
@@ -69,26 +68,19 @@ jobs:
 
       - run: flutter pub get
         working-directory: /tmp/scaffold
-      - name: Set iOS deployment target + inject Podfile post_install
-        run: |
-          cd /tmp/scaffold/ios
-          # Bump Runner deployment target
-          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = .*/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/g" Runner.xcodeproj/project.pbxproj || true
-          # Inject post_install hook into Podfile to fix all pod targets
-          cat >> Podfile << 'PODEOF'
 
-post_install do |installer|
-  installer.pods_project.targets.each do |target|
-    target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-      config.build_settings['SWIFT_SUPPRESS_WARNINGS'] = 'YES'
-      config.build_settings['GCC_WARN_INHIBIT_ALL_WARNINGS'] = 'YES'
-    end
-  end
-end
-PODEOF
+      - name: Set iOS deployment target
+        run: |
+          sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = .*/IPHONEOS_DEPLOYMENT_TARGET = 13.0;/g" \
+            /tmp/scaffold/ios/Runner.xcodeproj/project.pbxproj || true
+
+      - name: Inject Podfile post_install hook
+        run: |
+          printf '\npost_install do |installer|\n  installer.pods_project.targets.each do |target|\n    target.build_configurations.each do |config|\n      config.build_settings["IPHONEOS_DEPLOYMENT_TARGET"] = "13.0"\n      config.build_settings["SWIFT_SUPPRESS_WARNINGS"] = "YES"\n      config.build_settings["GCC_WARN_INHIBIT_ALL_WARNINGS"] = "YES"\n    end\n  end\nend\n' >> /tmp/scaffold/ios/Podfile
+
       - run: pod install --repo-update
         working-directory: /tmp/scaffold/ios
+
       - run: flutter build ios --simulator --no-codesign
         working-directory: /tmp/scaffold
 
