@@ -18,14 +18,23 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    final raw = await ssh.run('nvram get qos_enable\nnvram get qos_type\nnvram get qos_default\nnvram get qos_obw\nnvram get qos_ibw');
-    final lines = raw.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    final raw = await ssh.run('''
+echo "=F="; nvram get qos_enable 2>/dev/null || echo ""
+echo "=F="; nvram get qos_type 2>/dev/null || echo ""
+echo "=F="; nvram get qos_default 2>/dev/null || echo ""
+echo "=F="; nvram get qos_obw 2>/dev/null || echo ""
+echo "=F="; nvram get qos_ibw 2>/dev/null || echo ""
+''');
+    // Split by =F= sentinel to get values reliably
+    final parts = raw.split('=F=').map((s) => s.trim()).where((s) => s.isNotEmpty).toList();
+    // Each part: "value" (the line after =F=), skip empty
+    final vals = parts.map((p) => p.split('\n').where((l) => l.isNotEmpty).lastOrNull?.trim() ?? '').toList();
     return {
-      'enable':  lines.length > 0 ? lines[0].trim() : '0',
-      'type':    lines.length > 1 ? lines[1].trim() : '0',
-      'default': lines.length > 2 ? lines[2].trim() : '-',
-      'obw':     lines.length > 3 ? lines[3].trim() : '-',
-      'ibw':     lines.length > 4 ? lines[4].trim() : '-',
+      'enable':  vals.length > 0 ? vals[0] : '0',
+      'type':    vals.length > 1 ? vals[1] : '0',
+      'default': vals.length > 2 ? vals[2] : '-',
+      'obw':     vals.length > 3 ? vals[3] : '-',
+      'ibw':     vals.length > 4 ? vals[4] : '-',
     };
   } catch (_) { return {}; }
 });
@@ -34,29 +43,89 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return [];
   try {
-    final raw = await ssh.run('nvram get qos_orules');
+    // Also get qos_classnames for class labels
+    final raw = await ssh.run(
+      'echo "=RULES="; nvram get qos_orules 2>/dev/null || echo ""; '
+      'echo "=CLASSES="; nvram get qos_classnames 2>/dev/null || echo ""'
+    );
     final rules = <Map<String, String>>[];
-    for (final chunk in raw.trim().split('>')) {
-      final parts = chunk.split('<');
-      if (parts.length >= 7) {
-        rules.add({
-          'prio': parts[0].trim(), 'src': parts[1], 'dst': parts[2],
-          'proto': parts[3], 'srcport': parts[4], 'dstport': parts[5],
-          'desc': parts.length > 6 ? parts[6] : '',
-        });
+    
+    // Parse sections
+    String rulesStr = '';
+    String classStr = '';
+    if (raw.contains('=RULES=') && raw.contains('=CLASSES=')) {
+      final rIdx = raw.indexOf('=RULES=') + 7;
+      final cIdx = raw.indexOf('=CLASSES=');
+      rulesStr = raw.substring(rIdx, cIdx).trim();
+      classStr = raw.substring(cIdx + 9).trim();
+    } else {
+      rulesStr = raw.trim();
+    }
+    
+    // Parse class names (space separated: "Highest High Medium Low ...")
+    final classNames = classStr.trim().isEmpty ? <String>[] : classStr.trim().split(RegExp(r'\s+'));
+    
+    // FreshTomato qos_orules format: each rule ends with ">", fields separated by "<"
+    // Actual field order depends on version, common: prio<src<dst<proto<sport<dport<desc
+    // Or: tcp/udp<name<srcip<dstip<srcport<dstport<prio
+    for (final chunk in rulesStr.split('>')) {
+      final trimmed = chunk.trim();
+      if (trimmed.isEmpty) continue;
+      final parts = trimmed.split('<');
+      if (parts.length < 2) continue;
+      
+      // Detect format by checking if first field is a number (prio) or protocol
+      final firstField = parts[0].trim();
+      final isPrioFirst = int.tryParse(firstField) != null;
+      
+      String prio, proto, sport, dport, desc;
+      if (isPrioFirst) {
+        // Format: prio<src<dst<proto<sport<dport<desc
+        prio  = parts[0].trim();
+        proto = parts.length > 3 ? parts[3].trim() : 'any';
+        sport = parts.length > 4 ? parts[4].trim() : '';
+        dport = parts.length > 5 ? parts[5].trim() : '';
+        desc  = parts.length > 6 ? parts[6].trim() : '';
+      } else {
+        // Format: proto<name<src<dst<sport<dport<prio  (older format)
+        proto = parts[0].trim();
+        desc  = parts.length > 1 ? parts[1].trim() : '';
+        sport = parts.length > 4 ? parts[4].trim() : '';
+        dport = parts.length > 5 ? parts[5].trim() : '';
+        prio  = parts.length > 6 ? parts[6].trim() : '5';
       }
+      
+      // Resolve class name from prio index
+      final prioIdx = (int.tryParse(prio) ?? 5) - 1;
+      final className = (prioIdx >= 0 && prioIdx < classNames.length) ? classNames[prioIdx] : '';
+      
+      // Use desc if available, otherwise use class name, otherwise "Rule N"
+      final label = desc.isNotEmpty ? desc : (className.isNotEmpty ? className : '');
+      
+      rules.add({
+        'prio': prio, 'src': parts.length > 1 ? parts[1] : '',
+        'dst': parts.length > 2 ? parts[2] : '',
+        'proto': proto, 'srcport': sport, 'dstport': dport,
+        'desc': label,
+        'className': className,
+      });
     }
     return rules;
   } catch (_) { return []; }
 });
 
+// Realtime connections - auto refreshes every 5s when watched
+final _connStreamController = StateProvider<int>((ref) => 0);
+
 final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((ref) async {
+  // Depend on tick to trigger refresh
+  ref.watch(_connStreamController);
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return [];
   try {
     final raw = await ssh.run(
-        'cat /proc/net/nf_conntrack 2>/dev/null | head -80 || '
-        'cat /proc/net/ip_conntrack 2>/dev/null | head -80 || echo ""');
+        'cat /proc/net/nf_conntrack 2>/dev/null | head -100 || '
+        'cat /proc/net/ip_conntrack 2>/dev/null | head -100 || echo ""');
     final result = <Map<String, String>>[];
     for (final line in raw.split('\n')) {
       if (line.trim().isEmpty) continue;
@@ -65,12 +134,14 @@ final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((r
       final dsts  = RegExp(r'dst=(\S+)').allMatches(line).toList();
       final sp    = RegExp(r'sport=(\d+)').allMatches(line).toList();
       final dp    = RegExp(r'dport=(\d+)').allMatches(line).toList();
+      final bytes = RegExp(r'bytes=(\d+)').allMatches(line).toList();
       result.add({
         'proto': proto,
         'src':   srcs.isNotEmpty ? srcs[0].group(1)! : '-',
         'dst':   dsts.isNotEmpty ? dsts[0].group(1)! : '-',
         'sport': sp.isNotEmpty   ? sp[0].group(1)!   : '-',
         'dport': dp.isNotEmpty   ? dp[0].group(1)!   : '-',
+        'bytes': bytes.isNotEmpty ? bytes[0].group(1)! : '0',
       });
     }
     return result;
@@ -1088,11 +1159,31 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
   }
 }
 
-class _QosConnectionsTab extends ConsumerWidget {
+class _QosConnectionsTab extends ConsumerStatefulWidget {
   const _QosConnectionsTab({super.key});
+  @override
+  ConsumerState<_QosConnectionsTab> createState() => _QosConnectionsTabState();
+}
+
+class _QosConnectionsTabState extends ConsumerState<_QosConnectionsTab> {
+  Timer? _timer;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      ref.read(_connStreamController.notifier).state++;
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final conns  = ref.watch(qosConnProvider);
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;

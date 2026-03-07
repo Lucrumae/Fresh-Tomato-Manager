@@ -69,7 +69,7 @@ class DashboardScreen extends ConsumerWidget {
             padding: const EdgeInsets.all(16),
             sliver: SliverList(delegate: SliverChildListDelegate([
 
-              // ── Status cards row ─────────────────────────────────────────
+              //  Status cards row 
               Builder(builder: (bCtx) {
                 final acc = Theme.of(bCtx).extension<AppColors>()?.accent;
                 return Row(children: [
@@ -96,12 +96,12 @@ class DashboardScreen extends ConsumerWidget {
               }),
               const SizedBox(height: 12),
 
-              // ── Bandwidth quick view ─────────────────────────────────────
+              //  Bandwidth quick view 
               _BandwidthCard(bandwidth: bandwidth)
                 .animate(delay: 100.ms).fadeIn().slideY(begin: 0.1),
               const SizedBox(height: 12),
 
-              // ── Network info ─────────────────────────────────────────────
+              //  Network info 
               AppCard(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -120,7 +120,7 @@ class DashboardScreen extends ConsumerWidget {
               ).animate(delay: 150.ms).fadeIn().slideY(begin: 0.1),
               const SizedBox(height: 12),
 
-              // ── Quick stats ──────────────────────────────────────────────
+              //  Quick stats 
               Row(children: [
                 Expanded(child: _QuickStat(
                   icon: Icons.devices_rounded,
@@ -145,7 +145,7 @@ class DashboardScreen extends ConsumerWidget {
               ]),
               const SizedBox(height: 12),
 
-              // ── Firmware ─────────────────────────────────────────────────
+              //  Firmware 
               AppCard(
                 child: Row(
                   children: [
@@ -227,18 +227,27 @@ class _StatCard extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: percent.clamp(0, 1),
-              backgroundColor: AppTheme.border,
-              valueColor: AlwaysStoppedAnimation(color),
-              minHeight: 6,
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: percent.clamp(0.0, 1.0)),
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(
+                value: v,
+                backgroundColor: AppTheme.border,
+                valueColor: AlwaysStoppedAnimation(color),
+                minHeight: 6,
+              ),
             ),
           ),
           const SizedBox(height: 4),
-          Text('${(percent * 100).toStringAsFixed(1)}%',
-            style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: percent.clamp(0.0, 1.0) * 100),
+            duration: const Duration(milliseconds: 600),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => Text('${v.toStringAsFixed(1)}%',
+              style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -268,12 +277,12 @@ class _BandwidthCard extends StatelessWidget {
           const SizedBox(height: 14),
           Row(children: [
             Expanded(child: _BwStat(
-              label: '↓ Download',
+              label: 'Down Download',
               value: _fmt(bandwidth.currentRx),
               color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
             )),
             Expanded(child: _BwStat(
-              label: '↑ Upload',
+              label: 'Up Upload',
               value: _fmt(bandwidth.currentTx),
               color: AppTheme.secondary,
             )),

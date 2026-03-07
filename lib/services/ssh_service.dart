@@ -101,7 +101,10 @@ cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|^Cached"
 echo "=UPTIME="
 cat /proc/uptime
 echo "=TEMP="
-cat /proc/dmu/temperature 2>/dev/null || cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0
+( cat /proc/dmu/temperature 2>/dev/null | grep -oE '[0-9]+' | tail -1 ) || \
+( cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null ) || \
+( cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null ) || \
+echo 0
 echo "=NVRAM="
 nvram get wan_ipaddr
 nvram get lan_ipaddr
@@ -114,6 +117,73 @@ nvram get os_version
       debugPrint('getStatus error: $e');
       return RouterStatus.empty();
     }
+  }
+
+  // Fast poll - only CPU/RAM/temp, reuses existing nvram fields from [current]
+  Future<RouterStatus> getStatusFast(RouterStatus current) async {
+    try {
+      final output = await run(r'''
+echo "=CPU="
+cat /proc/stat | head -1
+echo "=MEM="
+cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|^Cached"
+echo "=TEMP="
+( cat /proc/dmu/temperature 2>/dev/null | grep -oE '[0-9]+' | tail -1 ) || ( cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null ) || ( cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null ) || echo 0
+''');
+      final sections = _parseSections(output);
+
+      // CPU
+      double cpuPercent = current.cpuPercent;
+      final cpuLine = sections['CPU']?.firstOrNull ?? '';
+      final cpuParts = cpuLine.split(RegExp(r'\s+'));
+      if (cpuParts.length >= 5) {
+        final user   = int.tryParse(cpuParts[1]) ?? 0;
+        final nice   = int.tryParse(cpuParts[2]) ?? 0;
+        final system = int.tryParse(cpuParts[3]) ?? 0;
+        final idle   = int.tryParse(cpuParts[4]) ?? 0;
+        final total  = user + nice + system + idle;
+        if (total > 0) cpuPercent = (user + nice + system) / total * 100;
+      }
+
+      // RAM
+      int memTotal = current.ramTotalMB * 1024;
+      int memFree = 0, memBuffers = 0, memCached = 0;
+      for (final line in sections['MEM'] ?? []) {
+        final p = line.split(RegExp(r'\s+'));
+        if (p.length >= 2) {
+          final val = int.tryParse(p[1]) ?? 0;
+          if (line.startsWith('MemTotal'))   memTotal   = val;
+          if (line.startsWith('MemFree'))    memFree    = val;
+          if (line.startsWith('Buffers'))    memBuffers = val;
+          if (line.startsWith('Cached'))     memCached  = val;
+        }
+      }
+      final memUsed = memTotal - memFree - memBuffers - memCached;
+
+      // Temp
+      double cpuTempC = current.cpuTempC;
+      final tempLines = sections['TEMP'] ?? [];
+      for (final tl in tempLines) {
+        final cleaned = tl.replaceAll(RegExp(r'[a-zA-Z:=\s]+'), '').trim();
+        final tempVal = double.tryParse(cleaned) ?? 0;
+        if (tempVal > 1000) { cpuTempC = tempVal / 1000; break; }
+        else if (tempVal > 0) { cpuTempC = tempVal; break; }
+      }
+
+      return RouterStatus(
+        cpuPercent:  cpuPercent.clamp(0, 100),
+        ramUsedMB:   (memUsed / 1024).round(),
+        ramTotalMB:  (memTotal / 1024).round(),
+        uptime:      current.uptime,
+        wanIp:       current.wanIp,
+        lanIp:       current.lanIp,
+        wifiSsid:    current.wifiSsid,
+        routerModel: current.routerModel,
+        firmware:    current.firmware,
+        isOnline:    true,
+        cpuTempC:    cpuTempC,
+      );
+    } catch (_) { return current; }
   }
 
   //  Traffic history (FreshTomato nvram traff-YYYY-MM format) 
@@ -284,16 +354,20 @@ nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
         uptime = d > 0 ? '${d}d ${h}h ${m}m' : '${h}h ${m}m';
       }
 
-      // CPU Temp
+      // CPU Temp - try multiple sources and formats
       double cpuTempC = 0;
-      final tempLine = (sections['TEMP'] ?? []).firstOrNull ?? '0';
-      final tempVal = double.tryParse(tempLine.trim()) ?? 0;
-      // /proc/dmu/temperature returns value like "temperature: 52000" or raw "52000"
-      // /sys/class/thermal returns millidegrees e.g. 52000
-      if (tempVal > 1000) {
-        cpuTempC = tempVal / 1000; // millidegrees -> degrees
-      } else if (tempVal > 0) {
-        cpuTempC = tempVal; // already in degrees
+      final tempLines = sections['TEMP'] ?? [];
+      for (final tl in tempLines) {
+        // Strip prefix like "temperature: 52000" or "Temp: 52.0"
+        final cleaned = tl.replaceAll(RegExp(r'[a-zA-Z:=\s]+'), '').trim();
+        final tempVal = double.tryParse(cleaned) ?? 0;
+        if (tempVal > 1000) {
+          cpuTempC = tempVal / 1000; // millidegrees
+          break;
+        } else if (tempVal > 0) {
+          cpuTempC = tempVal; // already celsius
+          break;
+        }
       }
 
       final nvram = sections['NVRAM'] ?? [];

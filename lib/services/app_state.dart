@@ -8,10 +8,10 @@ import '../theme/app_theme.dart';
 import 'ssh_service.dart';
 import 'notification_service.dart';
 
-// ── SSH Service singleton ─────────────────────────────────────────────────────
+//  SSH Service singleton 
 final sshServiceProvider = Provider<SshService>((ref) => SshService());
 
-// ── Dark mode ─────────────────────────────────────────────────────────────────
+//  Dark mode 
 final darkModeProvider = StateNotifierProvider<DarkModeNotifier, bool>((ref) {
   return DarkModeNotifier();
 });
@@ -31,7 +31,7 @@ class DarkModeNotifier extends StateNotifier<bool> {
   }
 }
 
-// ── Accent color ──────────────────────────────────────────────────────────────
+//  Accent color 
 final accentProvider = StateNotifierProvider<AccentNotifier, AccentColor>((ref) {
   return AccentNotifier();
 });
@@ -53,7 +53,7 @@ class AccentNotifier extends StateNotifier<AccentColor> {
 }
 
 
-// ── Config ────────────────────────────────────────────────────────────────────
+//  Config 
 final configProvider = StateNotifierProvider<ConfigNotifier, TomatoConfig?>((ref) {
   return ConfigNotifier();
 });
@@ -80,41 +80,60 @@ class ConfigNotifier extends StateNotifier<TomatoConfig?> {
   }
 }
 
-// ── Network type (WiFi check) ─────────────────────────────────────────────────
+//  Network type (WiFi check) 
 final networkTypeProvider = StreamProvider<ConnectivityResult>((ref) {
   return Connectivity().onConnectivityChanged;
 });
 
-// ── Router status ─────────────────────────────────────────────────────────────
+//  Router status 
 final routerStatusProvider = StateNotifierProvider<RouterStatusNotifier, RouterStatus>((ref) {
   return RouterStatusNotifier(ref);
 });
 
 class RouterStatusNotifier extends StateNotifier<RouterStatus> {
   final Ref _ref;
-  Timer? _timer;
+  Timer? _fastTimer;  // 2s - CPU, RAM, temp
+  Timer? _slowTimer;  // 30s - nvram info (model, IP, etc)
   RouterStatusNotifier(this._ref) : super(RouterStatus.empty());
 
   void startPolling() {
-    _timer?.cancel();
-    fetch();
-    _timer = Timer.periodic(const Duration(seconds: 5), (_) => fetch());
+    _fastTimer?.cancel();
+    _slowTimer?.cancel();
+    // Fetch full status immediately on start
+    fetchFull();
+    // Fast poll: CPU/RAM/temp every 2 seconds
+    _fastTimer = Timer.periodic(const Duration(seconds: 2), (_) => fetchFast());
+    // Slow poll: nvram info every 30 seconds
+    _slowTimer = Timer.periodic(const Duration(seconds: 30), (_) => fetchFull());
   }
 
-  void stopPolling() => _timer?.cancel();
+  void stopPolling() {
+    _fastTimer?.cancel();
+    _slowTimer?.cancel();
+  }
 
-  Future<void> fetch() async {
+  Future<void> fetchFast() async {
+    final ssh = _ref.read(sshServiceProvider);
+    if (!ssh.isConnected) return;
+    final updated = await ssh.getStatusFast(state);
+    if (mounted) state = updated;
+  }
+
+  Future<void> fetchFull() async {
     final ssh = _ref.read(sshServiceProvider);
     if (!ssh.isConnected) return;
     final status = await ssh.getStatus();
     if (mounted) state = status;
   }
 
+  // Keep fetch() for compatibility
+  Future<void> fetch() => fetchFull();
+
   @override
-  void dispose() { _timer?.cancel(); super.dispose(); }
+  void dispose() { _fastTimer?.cancel(); _slowTimer?.cancel(); super.dispose(); }
 }
 
-// ── Devices ───────────────────────────────────────────────────────────────────
+//  Devices 
 final devicesProvider = StateNotifierProvider<DevicesNotifier, List<ConnectedDevice>>((ref) {
   return DevicesNotifier(ref);
 });
@@ -173,7 +192,7 @@ class DevicesNotifier extends StateNotifier<List<ConnectedDevice>> {
   void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-// ── Bandwidth ─────────────────────────────────────────────────────────────────
+//  Bandwidth 
 final bandwidthProvider = StateNotifierProvider<BandwidthNotifier, BandwidthStats>((ref) {
   return BandwidthNotifier(ref);
 });
@@ -227,14 +246,23 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-// ── Logs ──────────────────────────────────────────────────────────────────────
+//  Logs 
 final logsProvider = StateNotifierProvider<LogsNotifier, List<LogEntry>>((ref) {
   return LogsNotifier(ref);
 });
 
 class LogsNotifier extends StateNotifier<List<LogEntry>> {
   final Ref _ref;
+  Timer? _timer;
   LogsNotifier(this._ref) : super([]);
+
+  void startPolling() {
+    _timer?.cancel();
+    fetch();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => fetch());
+  }
+
+  void stopPolling() => _timer?.cancel();
 
   Future<void> fetch() async {
     final ssh = _ref.read(sshServiceProvider);
@@ -242,9 +270,12 @@ class LogsNotifier extends StateNotifier<List<LogEntry>> {
     final logs = await ssh.getLogs();
     if (mounted) state = logs;
   }
+
+  @override
+  void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-// ── QoS ───────────────────────────────────────────────────────────────────────
+//  QoS 
 final qosProvider = StateNotifierProvider<QosNotifier, List<QosRule>>((ref) {
   return QosNotifier(ref);
 });
@@ -266,7 +297,7 @@ class QosNotifier extends StateNotifier<List<QosRule>> {
   }
 }
 
-// ── Port Forward ──────────────────────────────────────────────────────────────
+//  Port Forward 
 final portForwardProvider = StateNotifierProvider<PortForwardNotifier, List<PortForwardRule>>((ref) {
   return PortForwardNotifier(ref);
 });

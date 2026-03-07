@@ -16,6 +16,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
 
   @override
   void dispose() {
+    ref.read(logsProvider.notifier).stopPolling();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -31,20 +32,34 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   String _search = '';
   bool _loading = false;
 
+  bool _userScrolled = false;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _fetch());
+    _scrollCtrl.addListener(() {
+      final pos = _scrollCtrl.position;
+      _userScrolled = pos.pixels < pos.maxScrollExtent - 50;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(logsProvider.notifier).startPolling();
+    });
   }
 
   Future<void> _fetch() async {
     setState(() => _loading = true);
     await ref.read(logsProvider.notifier).fetch();
-    if (mounted) setState(() => _loading = false);
+    if (mounted) {
+      setState(() => _loading = false);
+      if (!_userScrolled) _scrollToBottom();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    ref.listen(logsProvider, (_, __) {
+      if (!_userScrolled) _scrollToBottom();
+    });
     final logs = ref.watch(logsProvider);
     final filtered = logs.where((l) {
       final matchSearch = _search.isEmpty ||
@@ -85,8 +100,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
                   _Chip(label: 'All', value: 'all', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: '🔴 Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: '🟡 Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: '? Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: '? Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
                 ]),
               ),
             ]),

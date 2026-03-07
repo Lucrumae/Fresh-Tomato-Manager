@@ -7,7 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
 
-// ─── ANSI Parser ──────────────────────────────────────────────────────────────
+//  ANSI Parser 
 class _Span {
   final String text;
   final Color? fg, bg;
@@ -69,7 +69,7 @@ class _Line {
   _Line(this.spans, {this.partial=false});
 }
 
-// ─── Terminal Screen ──────────────────────────────────────────────────────────
+//  Terminal Screen 
 class TerminalScreen extends ConsumerStatefulWidget {
   const TerminalScreen({super.key});
   @override ConsumerState<TerminalScreen> createState() => _TS();
@@ -87,7 +87,7 @@ class _TS extends ConsumerState<TerminalScreen> {
   final _hist=<String>[];
   int _hi=-1;
 
-  // Theme-reactive colors — updated each build()
+  // Theme-reactive colors - updated each build()
   bool   _isDark = true;
   Color  _accent = const Color(0xFF00E5A0);
   Color  _bg     = const Color(0xFF0B0F1A);
@@ -208,7 +208,7 @@ class _TS extends ConsumerState<TerminalScreen> {
         color: _bg,
         child: Column(children: [
 
-          // ── TOP BAR ───────────────────────────────────────────────────────
+          //  TOP BAR 
           Container(
             padding: const EdgeInsets.symmetric(horizontal:12, vertical:6),
             color: _bar,
@@ -245,7 +245,7 @@ class _TS extends ConsumerState<TerminalScreen> {
             ]),
           ),
 
-          // ── OUTPUT ────────────────────────────────────────────────────────
+          //  OUTPUT 
           Expanded(
             child: _loading
               ? Center(child:Column(mainAxisSize:MainAxisSize.min, children:[
@@ -263,7 +263,7 @@ class _TS extends ConsumerState<TerminalScreen> {
                 ),
           ),
 
-          // ── ALWAYS-VISIBLE TOOLBAR ─────────────────────────────────────────
+          //  ALWAYS-VISIBLE TOOLBAR 
           Container(
             decoration:BoxDecoration(
               color:_bar,
@@ -284,12 +284,13 @@ class _TS extends ConsumerState<TerminalScreen> {
                 scrollDirection:Axis.horizontal,
                 padding:const EdgeInsets.symmetric(horizontal:6, vertical:5),
                 children:[
-                  _cBtn('↑', _hUp, col:Colors.white70),
-                  _cBtn('↓', _hDn, col:Colors.white70),
+                  _cBtn('?', _hUp, col:Colors.white70),
+                  _cBtn('?', _hDn, col:Colors.white70),
                   _sep(),
                   _cBtn('^C', ()=>_raw([3])),
                   _cBtn('^D', ()=>_raw([4])),
                   _cBtn('^Z', ()=>_raw([26])),
+                  _cBtn('^X', ()=>_raw([24])),
                   _sep(),
                   _cBtn('^L', ()=>_raw([12])),
                   _cBtn('^S', ()=>_raw([19])),
@@ -297,8 +298,8 @@ class _TS extends ConsumerState<TerminalScreen> {
                   _sep(),
                   _cBtn('^A', ()=>_raw([1])),
                   _cBtn('^E', ()=>_raw([5])),
-                  _cBtn('Alt←', ()=>_raw([27,98]), col:Colors.white54),
-                  _cBtn('Alt→', ()=>_raw([27,102]), col:Colors.white54),
+                  _cBtn('Alt?', ()=>_raw([27,98]), col:Colors.white54),
+                  _cBtn('Alt->', ()=>_raw([27,102]), col:Colors.white54),
                   _sep(),
                   _cBtn('^U', ()=>_raw([21])),
                   _cBtn('^K', ()=>_raw([11])),
@@ -317,7 +318,7 @@ class _TS extends ConsumerState<TerminalScreen> {
 
               Divider(height:1, color:_brd),
 
-              // Row 3: Input — Enter key keeps keyboard open (like Termius)
+              // Row 3: Input - Enter key keeps keyboard open (like Termius)
               Container(
                 color:_bar,
                 padding:const EdgeInsets.fromLTRB(10,4,8,6),
