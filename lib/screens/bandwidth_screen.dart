@@ -15,55 +15,45 @@ final trafficHistoryProvider = FutureProvider.autoDispose<Map<String, dynamic>>(
 });
 
 // QoS providers
+// Tick controllers for realtime refresh
+final _basicTickProvider    = StateProvider<int>((ref) => 0);
+final _classifyTickProvider = StateProvider<int>((ref) => 0);
+
 final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) async {
+  ref.watch(_basicTickProvider); // re-run on tick
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    // Use separate calls with echo markers - more reliable than multiline
-    final enable  = (await ssh.run('nvram get qos_enable')).trim();
-    final type    = (await ssh.run('nvram get qos_type')).trim();
-    final defCls  = (await ssh.run('nvram get qos_default')).trim();
-    final obw     = (await ssh.run('nvram get qos_obw')).trim();
-    final ibw     = (await ssh.run('nvram get qos_ibw')).trim();
-    final cmode   = (await ssh.run('nvram get qos_cmode 2>/dev/null || echo 0')).trim();
+    final enable = (await ssh.run('nvram get qos_enable')).trim();
+    final type   = (await ssh.run('nvram get qos_type')).trim();
+    final defCls = (await ssh.run('nvram get qos_default')).trim();
+    final obw    = (await ssh.run('nvram get qos_obw')).trim();
+    final ibw    = (await ssh.run('nvram get qos_ibw')).trim();
+    final cmode  = (await ssh.run('nvram get qos_cmode 2>/dev/null || echo 0')).trim();
     return {
-      'enable':  enable.isEmpty  ? '0' : enable,
-      'type':    type.isEmpty    ? '0' : type,
-      'default': defCls.isEmpty  ? ''  : defCls,
-      'obw':     obw.isEmpty     ? ''  : obw,
-      'ibw':     ibw.isEmpty     ? ''  : ibw,
-      'cmode':   cmode.isEmpty   ? '0' : cmode,
+      'enable':  enable.isEmpty ? '0' : enable,
+      'type':    type.isEmpty   ? '0' : type,
+      'default': defCls,
+      'obw':     obw,
+      'ibw':     ibw,
+      'cmode':   cmode.isEmpty  ? '0' : cmode,
     };
   } catch (_) { return {}; }
 });
 
 final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>>((ref) async {
+  ref.watch(_classifyTickProvider); // re-run on tick
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return [];
   try {
-    // Also get qos_classnames for class labels
-    final raw = await ssh.run(
-      'echo "=RULES="; nvram get qos_orules 2>/dev/null || echo ""; '
-      'echo "=CLASSES="; nvram get qos_classnames 2>/dev/null || echo ""; '
-      'echo "=IRATES="; nvram get qos_irates 2>/dev/null || echo ""; '
-      'echo "=ORATES="; nvram get qos_orates 2>/dev/null || echo ""'
-    );
+    // Read each nvram key separately - most reliable approach
+    final rulesRaw  = (await ssh.run('nvram get qos_orules 2>/dev/null || echo')).trim();
+    final classRaw  = (await ssh.run('nvram get qos_classnames 2>/dev/null || echo')).trim();
     final rules = <Map<String, String>>[];
     
-    // Parse sections
-    String rulesStr = '';
-    String classStr = '';
-    if (raw.contains('=RULES=') && raw.contains('=CLASSES=')) {
-      final rIdx = raw.indexOf('=RULES=') + 7;
-      final cIdx = raw.indexOf('=CLASSES=');
-      rulesStr = raw.substring(rIdx, cIdx).trim();
-      classStr = raw.substring(cIdx + 9).trim();
-    } else {
-      rulesStr = raw.trim();
-    }
-    
-    // Parse class names (space separated: "Highest High Medium Low ...")
-    final classNames = classStr.trim().isEmpty ? <String>[] : classStr.trim().split(RegExp(r'\s+'));
+    final rulesStr = rulesRaw;
+    // classnames: space-separated list e.g. "Service VOIP/Game Remote WWW Media ..."
+    final classNames = classRaw.isEmpty ? <String>[] : classRaw.split(RegExp(r'\s+'));
     
     // FreshTomato qos_orules ACTUAL format (from FreshTomato source qos.c):
     // Each rule fields (0-indexed):
@@ -298,6 +288,9 @@ class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
                 ref.invalidate(qosBasicProvider);
                 ref.invalidate(qosClassifyProvider);
                 ref.invalidate(qosConnProvider);
+                ref.read(_basicTickProvider.notifier).state++;
+                ref.read(_classifyTickProvider.notifier).state++;
+                ref.read(_connStreamController.notifier).state++;
               },
             ),
         ],
@@ -792,6 +785,22 @@ class _QosBasicTab extends ConsumerStatefulWidget {
 class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
   bool _saving = false;
   String? _saveMsg;
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Poll every 5 seconds
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) {
+      ref.read(_basicTickProvider.notifier).state++;
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _save(Map<String, String> current, {
     required bool enabled,
@@ -816,6 +825,7 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
       ].join(' && ');
       await ssh.run(cmds);
       ref.invalidate(qosBasicProvider);
+      ref.read(_basicTickProvider.notifier).state++;
       setState(() { _saveMsg = 'Saved!'; });
     } catch (e) {
       setState(() { _saveMsg = 'Error: $e'; });
@@ -1036,6 +1046,21 @@ class _QosClassifyTab extends ConsumerStatefulWidget {
 
 class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
   bool _saving = false;
+  Timer? _cTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _cTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      ref.read(_classifyTickProvider.notifier).state++;
+    });
+  }
+
+  @override
+  void dispose() {
+    _cTimer?.cancel();
+    super.dispose();
+  }
 
   // Serialize rules back to nvram qos_orules format: prio<src<dst<proto<srcport<dstport<desc>...
   Future<void> _saveRules(List<Map<String, String>> rules) async {
@@ -1044,26 +1069,23 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     try {
       // Encode each rule back to FreshTomato nvram format
       // FreshTomato: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable>...
-      const _protoToNum = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'};
-      final encoded = rules.map((r) {
+      const protoToNum = {'Any':'0','any':'0','TCP':'6','tcp':'6','UDP':'17','udp':'17','TCP/UDP':'256','ICMP':'1','icmp':'1'};
+      String encRule(Map<String, String> r) {
         final rawProto = r['proto'] ?? '0';
-        // Convert display name to numeric if needed
-        final protoNum = _protoToNum[rawProto] ?? rawProto;
-        final p1  = (r['port1']?.isNotEmpty == true) ? r['port1']! : (r['srcport'] ?? '0');
-        final p2  = (r['port2']?.isNotEmpty == true) ? r['port2']! : p1;
+        final protoNum = protoToNum[rawProto] ?? rawProto;
+        final p1  = (r['port1']?.isNotEmpty == true && r['port1'] != '0') ? r['port1']! : '';
+        final p2  = (r['port2']?.isNotEmpty == true && r['port2'] != '0') ? r['port2']! : p1;
         final kb1 = r['kb1'] ?? '0';
         final kb2 = r['kb2'] ?? '0';
         final prio = r['prio'] ?? '5';
         final src  = r['src'] ?? '';
         final dst  = r['dst'] ?? '';
-        // Use rawDesc if available (original un-modified description)
-        final desc = r['rawDesc']?.isNotEmpty == true ? r['rawDesc']!
-                   : (r['desc'] ?? '');
-        // FreshTomato format: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable
-        return '\$src<\$dst<\$protoNum<\$p1<\$p2<\$kb1<\$kb2<\$prio<0<0<\$desc<1';
-      }).join('>');
-      // Write to nvram - use printf to avoid shell escaping issues
-      await ssh.run("nvram set qos_orules='\$encoded' && nvram commit && service qos restart 2>/dev/null || true");
+        final desc = (r['rawDesc']?.isNotEmpty == true) ? r['rawDesc']! : (r['desc'] ?? '');
+        return '$src<$dst<$protoNum<$p1<$p2<$kb1<$kb2<$prio<0<0<$desc<1';
+      }
+      // FreshTomato: each rule ends with > (including last)
+      final encoded = rules.map(encRule).join('>') + '>';
+      await ssh.run("nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true");
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
