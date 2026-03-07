@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -130,20 +131,34 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     }
 
     final transfer = _Transfer(name: entry.name, isUpload: false);
-    setState(() => _transfers.add(transfer));
+    setState(() { transfer.progress = -1; _transfers.add(transfer); });
 
     try {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      final sftp = await ssh.client!.sftp();
-      final remoteFile = await sftp.open(entry.path, mode: SftpFileOpenMode.read);
+      // Use SSH execute + cat — more reliable on embedded routers than SFTP
+      setState(() => transfer.progress = -1); // indeterminate while reading
 
-      // Get real file size via stat
-      final stat = await remoteFile.stat();
-      final fileSize = stat.size ?? (entry.size > 0 ? entry.size : 0);
+      final session = await ssh.client!.execute('cat "${entry.path}"');
 
-      // Prepare local save path
+      // Collect all bytes
+      final chunks = <Uint8List>[];
+      int totalBytes = 0;
+      final fileSize = entry.size > 0 ? entry.size : 0;
+
+      await for (final chunk in session.stdout) {
+        chunks.add(Uint8List.fromList(chunk));
+        totalBytes += chunk.length;
+        if (fileSize > 0) {
+          setState(() => transfer.progress = (totalBytes / fileSize).clamp(0.0, 0.99));
+        }
+      }
+      await session.done;
+
+      if (totalBytes == 0) throw Exception('File kosong atau tidak dapat dibaca');
+
+      // Write to local file
       Directory saveDir;
       if (Platform.isAndroid) {
         saveDir = Directory('/storage/emulated/0/Download/TomatoManager');
@@ -154,32 +169,12 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       await saveDir.create(recursive: true);
 
       final localPath = '${saveDir.path}/${entry.name}';
-      final sink = File(localPath).openWrite();
-
-      // Read in 64KB chunks with explicit offset tracking
-      const chunkSize = 65536;
-      int offset = 0;
-
-      while (true) {
-        final chunk = await remoteFile.readBytes(
-          length: chunkSize,
-          offset: offset,
-        );
-        if (chunk.isEmpty) break;
-        sink.add(chunk);
-        offset += chunk.length;
-        if (fileSize > 0) {
-          setState(() => transfer.progress = (offset / fileSize).clamp(0.0, 1.0));
-        } else {
-          // Unknown size — pulse animation
-          setState(() => transfer.progress = -1);
-        }
-        if (chunk.length < chunkSize) break; // last chunk
+      final outFile = File(localPath);
+      final raf = await outFile.open(mode: FileMode.write);
+      for (final chunk in chunks) {
+        await raf.writeFrom(chunk);
       }
-
-      await sink.flush();
-      await sink.close();
-      await remoteFile.close();
+      await raf.close();
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
       if (mounted) {
@@ -223,24 +218,21 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      final sftp = await ssh.client!.sftp();
-      final remoteFile = await sftp.open(remotePath,
-        mode: SftpFileOpenMode.create | SftpFileOpenMode.write | SftpFileOpenMode.truncate);
-
-      // Write in 64KB chunks — writeBytes offset must increment correctly
-      const chunkSize = 65536;
+      // Upload via base64 piped through SSH — reliable on all routers
       final bytes = await localFile.readAsBytes();
-      int offset = 0;
+      setState(() => transfer.progress = 0.3); // encoding
 
-      while (offset < bytes.length) {
-        final end = (offset + chunkSize).clamp(0, bytes.length);
-        final chunk = Uint8List.sublistView(bytes, offset, end);
-        await remoteFile.writeBytes(chunk, offset: offset);
-        offset = end;
-        setState(() => transfer.progress = fileSize > 0
-          ? (offset / fileSize).clamp(0.0, 1.0) : 0.5);
-      }
-      await remoteFile.close();
+      // Encode to base64 in chunks to avoid huge single string
+      final b64 = base64Encode(bytes);
+      setState(() => transfer.progress = 0.6); // uploading
+
+      // Write via base64 decode on router side
+      final escapedPath = remotePath.replaceAll('"', '\"');
+      final session = await ssh.client!.execute(
+        'echo "$b64" | base64 -d > "$escapedPath"'
+      );
+      await session.done;
+      setState(() => transfer.progress = 1.0);
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
       _ls(_cwd); // refresh
