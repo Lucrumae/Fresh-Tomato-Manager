@@ -7,7 +7,7 @@ import '../services/app_state.dart';
 import '../services/ssh_service.dart';
 import '../models/models.dart';
 
-// ── Traffic + QoS history provider ───────────────────────────────────────────
+// ----------------------------------------
 final trafficHistoryProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
@@ -84,7 +84,7 @@ final qosConnProvider = FutureProvider.autoDispose<List<Map<String, String>>>((r
   } catch (_) { return []; }
 });
 
-// ── Main Screen ───────────────────────────────────────────────────────────────
+// ----------------------------------------
 class BandwidthScreen extends ConsumerStatefulWidget {
   const BandwidthScreen({super.key});
   @override
@@ -165,7 +165,7 @@ class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
   }
 }
 
-// ── Bandwidth Body ────────────────────────────────────────────────────────────
+// ----------------------------------------
 class _BandwidthBody extends StatelessWidget {
   final BandwidthStats bw;
   final AsyncValue<Map<String, dynamic>> history;
@@ -179,7 +179,7 @@ class _BandwidthBody extends StatelessWidget {
         padding: const EdgeInsets.all(16),
         children: [
 
-          // ── Speed cards ─────────────────────────────────────────────────
+          // ----------------------------------------
           Row(children: [
             Expanded(child: _SpeedCard(
               label: 'Download', icon: Icons.arrow_downward_rounded,
@@ -195,7 +195,7 @@ class _BandwidthBody extends StatelessWidget {
           ]),
           const SizedBox(height: 16),
 
-          // ── Real-time chart ──────────────────────────────────────────────
+          // ----------------------------------------
           AppCard(
             padding: const EdgeInsets.all(16),
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -213,7 +213,7 @@ class _BandwidthBody extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          // ── Session total ────────────────────────────────────────────────
+          // ----------------------------------------
           AppCard(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('Session Total', style: Theme.of(context).textTheme.titleSmall),
@@ -230,7 +230,7 @@ class _BandwidthBody extends StatelessWidget {
           ),
           const SizedBox(height: 24),
 
-          // ── Daily / Weekly / Monthly usage ──────────────────────────────
+          // ----------------------------------------
           _SectionHeader(title: 'Usage History', icon: Icons.bar_chart_rounded, color: accent),
           const SizedBox(height: 12),
 
@@ -254,7 +254,7 @@ class _BandwidthBody extends StatelessWidget {
   }
 }
 
-// ── Section Header ────────────────────────────────────────────────────────────
+// ----------------------------------------
 class _SectionHeader extends StatelessWidget {
   final String title;
   final IconData icon;
@@ -283,7 +283,7 @@ class _EmptyCard extends StatelessWidget {
   );
 }
 
-// ── Usage History Card with Daily / Weekly / Monthly tabs ────────────────────
+// ----------------------------------------
 class _UsageHistoryCard extends StatefulWidget {
   final List daily, monthly;
   const _UsageHistoryCard({required this.daily, required this.monthly});
@@ -487,7 +487,7 @@ class _HistoryBarChart extends StatelessWidget {
   }
 }
 
-// ── QoS Section ───────────────────────────────────────────────────────────────
+// ----------------------------------------
 class _QosFullPage extends ConsumerStatefulWidget {
   const _QosFullPage({super.key});
   @override
@@ -613,7 +613,7 @@ class _QosClassifyTab extends ConsumerWidget {
                 Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(r['desc']!.isNotEmpty ? r['desc']! : 'Rule',
                     style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: c.textPrimary)),
-                  Text('${r['proto']} · port: ${r['dstport']!.isNotEmpty ? r['dstport'] : 'any'}',
+                  Text('${r['proto']} ? port: ${r['dstport']!.isNotEmpty ? r['dstport'] : 'any'}',
                     style: TextStyle(fontSize: 11, color: c.textMuted)),
                 ])),
                 Container(
@@ -699,7 +699,7 @@ class _QRow extends StatelessWidget {
   }
 }
 
-// ── Shared chart widgets ──────────────────────────────────────────────────────
+// ----------------------------------------
 class _RealtimeChart extends StatelessWidget {
   final BandwidthStats bw;
   const _RealtimeChart({required this.bw});
