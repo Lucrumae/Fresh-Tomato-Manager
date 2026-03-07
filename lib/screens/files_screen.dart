@@ -512,6 +512,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
                     return _EntryRow(
                       entry: e,
                       isDark: _isDark,
+                      fmtSize: _fmtSize,
                       isSelected: isSelected,
                       selectMode: _selectMode,
                       onTap: _selectMode
