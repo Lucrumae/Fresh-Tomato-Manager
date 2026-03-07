@@ -7,6 +7,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:dartssh2/dartssh2.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
@@ -121,17 +122,9 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
   // ── Download ───────────────────────────────────────────────────────────────
   Future<void> _download(_FsEntry entry) async {
-    // Request storage permission
+    // Request storage permission with dialog
     if (Platform.isAndroid) {
-      final status = await Permission.storage.request();
-      if (!status.isGranted) {
-        final manageStatus = await Permission.manageExternalStorage.request();
-        if (!manageStatus.isGranted && mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Storage permission required for download')));
-          return;
-        }
-      }
+      if (!await _ensureStoragePermission()) return;
     }
 
     final transfer = _Transfer(name: entry.name, isUpload: false);
@@ -330,6 +323,73 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
     } catch (e) {
       setState(() { _error = e.toString(); _loading = false; });
     }
+  }
+
+  /// Returns true if permission granted, false if denied.
+  Future<bool> _ensureStoragePermission() async {
+    final sdkInt = await _androidSdk();
+    final perm = sdkInt >= 33
+        ? Permission.manageExternalStorage
+        : Permission.storage;
+
+    var status = await perm.status;
+    if (status.isGranted) return true;
+
+    // Show rationale before requesting
+    if (mounted) {
+      final proceed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Storage Permission'),
+          content: const Text(
+            'Tomato Manager needs storage access to upload and download files.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Allow')),
+          ],
+        ),
+      ) ?? false;
+      if (!proceed) return false;
+    }
+
+    status = await perm.request();
+    if (status.isGranted) return true;
+
+    if (mounted) {
+      if (status.isPermanentlyDenied) {
+        await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: const Text('Permission Blocked'),
+            content: const Text(
+              'Storage permission was blocked. Please enable it manually in App Settings.'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel')),
+              ElevatedButton(
+                onPressed: () { openAppSettings(); Navigator.pop(ctx); },
+                child: const Text('Open Settings')),
+            ],
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Storage permission denied')));
+      }
+    }
+    return false;
+  }
+
+  Future<int> _androidSdk() async {
+    try {
+      final info = await DeviceInfoPlugin().androidInfo;
+      return info.version.sdkInt;
+    } catch (_) { return 29; }
   }
 
   void _showContentSheet(String title, String content) {
@@ -616,7 +676,7 @@ class _EntryRow extends StatelessWidget {
               },
               itemBuilder: (_) => [
                 if (!entry.isDir)
-                  const PopupMenuItem(value:'download',
+                  PopupMenuItem(value:'download',
                     child: Row(children:[
                       Icon(Icons.download_rounded, size:16, color:_accent),
                       SizedBox(width:8), Text('Download'),
