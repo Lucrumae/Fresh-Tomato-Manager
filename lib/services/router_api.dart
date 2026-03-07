@@ -31,12 +31,33 @@ class RouterApiService {
   bool get isConfigured => _config != null && _dio != null;
 
   // ── Test connection ────────────────────────────────────────────────────────
-  Future<bool> testConnection() async {
+  Future<String?> testConnection() async {
+    // Returns null if success, or error message string if failed
+    if (_dio == null || _config == null) return 'Not configured';
     try {
-      final res = await _dio!.get('/');
-      return res.statusCode == 200 || res.statusCode == 302;
-    } catch (_) {
-      return false;
+      final res = await _dio!.get('/').timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => throw Exception('Connection timed out after 8 seconds'),
+      );
+      if (res.statusCode == 200 || res.statusCode == 302 || res.statusCode == 401) {
+        return null; // success (401 = router ada tapi butuh auth, masih valid)
+      }
+      return 'Unexpected response: HTTP \${res.statusCode}';
+    } on DioException catch (e) {
+      if (e.type == DioExceptionType.connectionTimeout ||
+          e.type == DioExceptionType.receiveTimeout ||
+          e.type == DioExceptionType.sendTimeout) {
+        return 'Connection timed out. Is the IP correct and are you on the same WiFi?';
+      }
+      if (e.type == DioExceptionType.connectionError) {
+        return 'Cannot reach \${_config!.host}. Check the IP address and make sure you are connected to the router WiFi.';
+      }
+      if (e.response?.statusCode == 401) {
+        return null; // Router ada tapi wrong credentials - masih bisa lanjut
+      }
+      return 'Connection error: \${e.message}';
+    } catch (e) {
+      return e.toString().replaceAll('Exception: ', '');
     }
   }
 

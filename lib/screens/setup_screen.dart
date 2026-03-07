@@ -44,18 +44,27 @@ class _SetupScreenState extends ConsumerState<SetupScreen> {
 
     final api = ref.read(apiServiceProvider);
     api.configure(config);
-    final ok = await api.testConnection();
 
-    if (ok) {
+    String? errorMsg;
+    try {
+      errorMsg = await api.testConnection().timeout(
+        const Duration(seconds: 12),
+        onTimeout: () => 'Timeout setelah 12 detik. Pastikan IP benar dan HP terhubung ke WiFi router.',
+      );
+    } catch (e) {
+      errorMsg = e.toString().replaceAll('Exception: ', '');
+    }
+
+    if (!mounted) return;
+
+    if (errorMsg == null) {
       await ref.read(configProvider.notifier).save(config);
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (_) => const MainShell()),
-        );
-      }
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => const MainShell()),
+      );
     } else {
       setState(() {
-        _error = 'Cannot connect to router. Check IP, credentials, and that you\'re on the same network or VPN.';
+        _error = errorMsg;
         _testing = false;
       });
     }
