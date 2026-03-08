@@ -38,8 +38,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // nvram show can be large - write to file first to avoid SSH buffer limits
       await ssh.run('nvram show > /tmp/nvram_backup.txt 2>/dev/null');
       final sizeStr = (await ssh.run('wc -c < /tmp/nvram_backup.txt 2>/dev/null || echo 0')).trim();
-      final size = int.tryParse(sizeStr.split('
-').first.trim()) ?? 0;
+      final size = int.tryParse(sizeStr.trim().split(RegExp(r'\s+')).first) ?? 0;
       if (size < 10) throw Exception('nvram show returned empty output');
 
       // Read in chunks to avoid SSH output buffer limits
@@ -51,9 +50,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         final part = await ssh.run('sed -n "${i},${ i + chunk - 1}p" /tmp/nvram_backup.txt');
         if (part.trim().isEmpty) break;
         sb.write(part);
-        if (!part.endsWith('
-')) sb.write('
-');
+        if (!part.endsWith('\n')) sb.write('\n');
       }
 
       final content = sb.toString();
