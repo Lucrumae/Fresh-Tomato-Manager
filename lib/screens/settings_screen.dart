@@ -21,40 +21,69 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _backupBusy   = false;
   bool _restoreBusy  = false;
   bool _resetBusy    = false;
-  String? _statusMsg;
-  bool _statusIsError = false;
-
-  void _showStatus(String msg, {bool error = false}) {
-    setState(() { _statusMsg = msg; _statusIsError = error; });
-    Future.delayed(const Duration(seconds: 5), () {
-      if (mounted) setState(() => _statusMsg = null);
-    });
-  }
 
   //  Backup 
   Future<void> _backup() async {
     final ssh = ref.read(sshServiceProvider);
-    if (!ssh.isConnected) { _showStatus('Not connected', error: true); return; }
+    if (!ssh.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Not connected to router'),
+        backgroundColor: AppTheme.danger));
+      return;
+    }
     setState(() => _backupBusy = true);
     try {
-      // Ask router for config backup (same as web UI Administration > Backup)
-      // FreshTomato stores config in nvram; export via 'nvram show' or cfg backup
-      // The web backup downloads /tmp/tomato.cfg - trigger generation first
-      await ssh.run('nvram save /tmp/tomato.cfg 2>/dev/null || true');
-      final cfgB64 = await ssh.run(
-        'base64 /tmp/tomato.cfg 2>/dev/null || nvram show | base64');
+      // FreshTomato: export config via /admin/config.cgi (same as web UI backup)
+      // Trigger the cfg export then read the file
+      final config = ref.read(configProvider);
+      final host = config?.host ?? '192.168.1.1';
 
-      // Decode base64
-      final bytes = _decodeBase64Loose(cfgB64.trim());
+      // Try HTTP download first (most reliable - same as web UI)
+      // wget the config from the router's web interface
+      await ssh.run(
+        'wget -q -O /tmp/tomato_backup.cfg '
+        '"http://admin:admin@$host/admin/config.cgi?asus=1" '
+        '2>/dev/null || true');
 
-      // Save to Downloads/TomatoManager/Backup/
+      // Check if we got a real file
+      final sizeStr = (await ssh.run(
+        'wc -c < /tmp/tomato_backup.cfg 2>/dev/null || echo 0')).trim();
+      final size = int.tryParse(sizeStr) ?? 0;
+
+      String cfgB64;
+      if (size > 100) {
+        // HTTP method worked
+        cfgB64 = (await ssh.run('base64 /tmp/tomato_backup.cfg')).trim();
+      } else {
+        // Fallback: dump nvram as text (always works)
+        cfgB64 = (await ssh.run('nvram show 2>/dev/null | base64')).trim();
+      }
+
+      final bytes = _decodeBase64Loose(cfgB64);
+      if (bytes.isEmpty) throw Exception('Empty backup data');
+
       final savePath = await _resolveDownloadPath('Backup');
-      final ts = DateTime.now().toIso8601String().replaceAll(':', '-').substring(0, 19);
-      final file = File('$savePath/tomato_$ts.cfg');
+      final ts = DateTime.now().toIso8601String()
+          .replaceAll(':', '-').substring(0, 19);
+      final ext = size > 100 ? 'cfg' : 'txt';
+      final file = File('$savePath/tomato_$ts.$ext');
       await file.writeAsBytes(bytes);
-      _showStatus('Saved to ${file.path}');
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Backup saved: tomato_$ts.$ext  (${bytes.length} bytes)'),
+          backgroundColor: AppTheme.success,
+          duration: const Duration(seconds: 4),
+        ));
+      }
     } catch (e) {
-      _showStatus('Backup failed: $e', error: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Backup failed: $e'),
+          backgroundColor: AppTheme.danger,
+          duration: const Duration(seconds: 4),
+        ));
+      }
     } finally {
       if (mounted) setState(() => _backupBusy = false);
     }
@@ -63,7 +92,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   //  Restore 
   Future<void> _restore() async {
     final ssh = ref.read(sshServiceProvider);
-    if (!ssh.isConnected) { _showStatus('Not connected', error: true); return; }
+    if (!ssh.isConnected) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Not connected to router'),
+        backgroundColor: AppTheme.danger)); return; }
 
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -98,9 +129,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       await ssh.run('nvram commit');
       // Reboot after restore
       ssh.run('reboot').catchError((_) {});
-      _showStatus('Restored! Router is rebooting...');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Configuration restored! Router is rebooting...'),
+          backgroundColor: AppTheme.success,
+          duration: Duration(seconds: 5),
+        ));
+      }
     } catch (e) {
-      _showStatus('Restore failed: $e', error: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Restore failed: $e'),
+          backgroundColor: AppTheme.danger,
+          duration: const Duration(seconds: 4),
+        ));
+      }
     } finally {
       if (mounted) setState(() => _restoreBusy = false);
     }
@@ -109,7 +152,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   //  NVRAM Reset 
   Future<void> _nvramReset() async {
     final ssh = ref.read(sshServiceProvider);
-    if (!ssh.isConnected) { _showStatus('Not connected', error: true); return; }
+    if (!ssh.isConnected) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Not connected to router'),
+        backgroundColor: AppTheme.danger)); return; }
 
     final confirm = await _confirm(
       'Reset NVRAM',
@@ -132,9 +177,21 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     try {
       await ssh.run('mtd-erase2 nvram 2>/dev/null || nvram erase');
       ssh.run('reboot').catchError((_) {});
-      _showStatus('NVRAM erased. Router is rebooting...');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('NVRAM erased! Router is rebooting to factory defaults...'),
+          backgroundColor: AppTheme.warning,
+          duration: Duration(seconds: 5),
+        ));
+      }
     } catch (e) {
-      _showStatus('Reset failed: $e', error: true);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Reset failed: $e'),
+          backgroundColor: AppTheme.danger,
+          duration: const Duration(seconds: 4),
+        ));
+      }
     } finally {
       if (mounted) setState(() => _resetBusy = false);
     }
@@ -230,26 +287,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         children: [
 
-          // Status message
-          if (_statusMsg != null)
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: _statusIsError
-                  ? AppTheme.danger.withOpacity(0.15)
-                  : AppTheme.success.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: _statusIsError ? AppTheme.danger : AppTheme.success),
-              ),
-              child: Row(children: [
-                Icon(_statusIsError ? Icons.error_outline : Icons.check_circle_outline,
-                  size: 16, color: _statusIsError ? AppTheme.danger : AppTheme.success),
-                const SizedBox(width: 8),
-                Expanded(child: Text(_statusMsg!, style: TextStyle(fontSize: 12,
-                  color: _statusIsError ? AppTheme.danger : AppTheme.success))),
-              ]),
-            ),
+
 
           //  Connection 
           AppCard(
