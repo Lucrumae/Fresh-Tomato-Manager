@@ -214,23 +214,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final fwSize = result.files.single.size;
 
     // Warn and confirm
+    final sizeMB = (fwSize / 1024 / 1024).toStringAsFixed(1);
+    final confirmMsg = 'File: $fwName ($sizeMB MB)\n\n'
+        'This will:\n1. Force-unmount JFFS if mounted\n'
+        '2. Reset NVRAM\n3. Flash the firmware\n'
+        '4. Reboot router\n\nDo NOT disconnect during flash. Continue?';
     final ok = await _confirm(
       'Upgrade Firmware',
-      'File: $fwName (${(fwSize / 1024 / 1024).toStringAsFixed(1)} MB)
-
-'
-      'This will:
-'
-      '1. Force-unmount JFFS if mounted
-'
-      '2. Reset NVRAM
-'
-      '3. Flash the firmware
-'
-      '4. Reboot router
-
-'
-      'Do NOT disconnect during flash. Continue?',
+      confirmMsg,
       confirmColor: AppTheme.danger,
       confirmLabel: 'Flash Now',
     );
