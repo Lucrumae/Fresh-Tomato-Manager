@@ -22,6 +22,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   bool _backupBusy   = false;
   bool _restoreBusy  = false;
   bool _resetBusy    = false;
+  bool _firmwareBusy = false;
 
   //  Backup 
   Future<void> _backup() async {
@@ -59,12 +60,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       final savePath = await _resolveDownloadPath('Backup');
       final ts = DateTime.now().toIso8601String()
           .replaceAll(':', '-').substring(0, 19);
-      final file = File('$savePath/tomato_$ts.txt');
+      final file = File('$savePath/tomato_$ts.cfg');
       await file.writeAsString(content);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Backup saved! ${file.path.split('/').last}  ($size bytes)'),
+          content: Text('Saved: tomato_$ts.cfg  ($size bytes)'),
           backgroundColor: AppTheme.success,
           duration: const Duration(seconds: 5),
         ));
@@ -191,6 +192,127 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  // -- Firmware Upgrade --
+  Future<void> _upgradeFirmware() async {
+    final ssh = ref.read(sshServiceProvider);
+    if (!ssh.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Not connected to router'),
+        backgroundColor: AppTheme.danger));
+      return;
+    }
+
+    // Pick firmware file
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.any,
+      dialogTitle: 'Select firmware file (.trx, .bin, .img)',
+    );
+    if (result == null || result.files.single.path == null) return;
+
+    final fwPath = result.files.single.path!;
+    final fwName = result.files.single.name;
+    final fwSize = result.files.single.size;
+
+    // Warn and confirm
+    final ok = await _confirm(
+      'Upgrade Firmware',
+      'File: $fwName (${(fwSize / 1024 / 1024).toStringAsFixed(1)} MB)
+
+'
+      'This will:
+'
+      '1. Force-unmount JFFS if mounted
+'
+      '2. Reset NVRAM
+'
+      '3. Flash the firmware
+'
+      '4. Reboot router
+
+'
+      'Do NOT disconnect during flash. Continue?',
+      confirmColor: AppTheme.danger,
+      confirmLabel: 'Flash Now',
+    );
+    if (ok != true) return;
+
+    setState(() => _firmwareBusy = true);
+    _showProgress('Preparing firmware upload...');
+
+    try {
+      // Step 1: Unmount JFFS if mounted
+      _showProgress('Step 1/4: Checking JFFS...');
+      final jffsCheck = await ssh.run('mount | grep jffs 2>/dev/null || echo ""');
+      if (jffsCheck.trim().isNotEmpty) {
+        await ssh.run('umount -f /jffs 2>/dev/null || true');
+        await ssh.run('umount -l /jffs 2>/dev/null || true');
+      }
+
+      // Step 2: Reset NVRAM
+      _showProgress('Step 2/4: Resetting NVRAM...');
+      await ssh.run('nvram erase 2>/dev/null || mtd-erase2 nvram 2>/dev/null || true');
+
+      // Step 3: Upload firmware via base64 chunks
+      _showProgress('Step 3/4: Uploading firmware ($fwName)...');
+      final fileBytes = await File(fwPath).readAsBytes();
+      final b64 = base64Encode(fileBytes);
+      await ssh.run('rm -f /tmp/firmware_upload.b64 /tmp/firmware_upload.bin');
+      const chunkSize = 3000;
+      var uploaded = 0;
+      for (var i = 0; i < b64.length; i += chunkSize) {
+        final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
+        final chunk = b64.substring(i, end);
+        final op = i == 0 ? '>' : '>>';
+        await ssh.run("printf '%s' '$chunk' $op /tmp/firmware_upload.b64");
+        uploaded += (end - i);
+        final pct = (uploaded / b64.length * 100).toStringAsFixed(0);
+        _showProgress('Step 3/4: Uploading... $pct%');
+      }
+      await ssh.run('base64 -d /tmp/firmware_upload.b64 > /tmp/firmware_upload.bin');
+      // Verify size
+      final uploadedSize = int.tryParse(
+        (await ssh.run('wc -c < /tmp/firmware_upload.bin')).trim()) ?? 0;
+      if (uploadedSize < 1024 * 1024) {
+        throw Exception('Upload failed: only $uploadedSize bytes received');
+      }
+
+      // Step 4: Flash firmware
+      _showProgress('Step 4/4: Flashing... DO NOT DISCONNECT!');
+      // FreshTomato uses mtd-write or write to flash
+      ssh.run(
+        'mtd-write2 /tmp/firmware_upload.bin linux 2>/dev/null || '
+        'mtd write /tmp/firmware_upload.bin linux 2>/dev/null || '
+        'write /tmp/firmware_upload.bin linux 2>/dev/null && reboot'
+      ).catchError((_) {});
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Firmware flashing started! Router will reboot when done. '
+              'Wait 2-3 minutes before reconnecting.'),
+          backgroundColor: AppTheme.warning,
+          duration: Duration(seconds: 10),
+        ));
+        setState(() => _progressMsg = null);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Firmware upgrade failed: $e'),
+          backgroundColor: AppTheme.danger,
+          duration: const Duration(seconds: 5),
+        ));
+        setState(() => _progressMsg = null);
+      }
+    } finally {
+      if (mounted) setState(() => _firmwareBusy = false);
+    }
+  }
+
+  String? _progressMsg;
+  void _showProgress(String msg) {
+    if (mounted) setState(() => _progressMsg = msg);
+  }
+
   Future<bool?> _confirm(String title, String msg, {
     required Color confirmColor, required String confirmLabel}) =>
     showDialog<bool>(context: context, builder: (_) => AlertDialog(
@@ -246,7 +368,25 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         padding: const EdgeInsets.all(16),
         children: [
 
-
+          // Progress banner for firmware flash
+          if (_progressMsg != null)
+            Container(
+              margin: const EdgeInsets.only(bottom: 12),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.warning),
+              ),
+              child: Row(children: [
+                const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2,
+                    color: AppTheme.warning)),
+                const SizedBox(width: 10),
+                Expanded(child: Text(_progressMsg!,
+                  style: const TextStyle(fontSize: 13, color: AppTheme.warning))),
+              ]),
+            ),
 
           //  Connection 
           AppCard(
