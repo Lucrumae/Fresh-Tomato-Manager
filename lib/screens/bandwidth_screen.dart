@@ -24,20 +24,32 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    // Separate calls - avoids all $ escaping issues in Dart strings
-    final enable  = (await ssh.run('nvram get qos_enable')).trim();
-    final type    = (await ssh.run('nvram get qos_type')).trim();
-    final defCls  = (await ssh.run('nvram get qos_default')).trim();
-    final obw     = (await ssh.run('nvram get qos_obw')).trim();
-    final ibw     = (await ssh.run('nvram get qos_ibw')).trim();
-    final cmode   = (await ssh.run('nvram get qos_cmode')).trim();
+    // Read all relevant nvram keys individually
+    final enable    = (await ssh.run('nvram get qos_enable')).trim();
+    final type      = (await ssh.run('nvram get qos_type')).trim();
+    final defCls    = (await ssh.run('nvram get qos_default')).trim();
+    final obw       = (await ssh.run('nvram get qos_obw')).trim();
+    final ibw       = (await ssh.run('nvram get qos_ibw')).trim();
+    final cmode     = (await ssh.run('nvram get qos_cmode')).trim();
+    final ack       = (await ssh.run('nvram get qos_ackfilter')).trim();
+    final icmp      = (await ssh.run('nvram get qos_icmp')).trim();
+    final classify  = (await ssh.run('nvram get qos_classify')).trim();
+    final sched     = (await ssh.run('nvram get qos_sched')).trim();
+    final cakeWash  = (await ssh.run('nvram get qos_cake_wash')).trim();
+    final udpNoIng  = (await ssh.run('nvram get qos_udp')).trim();
     return {
-      'enable':  enable.isEmpty  ? '0' : enable,
-      'type':    type.isEmpty    ? '0' : type,
-      'default': defCls,
-      'obw':     obw,
-      'ibw':     ibw,
-      'cmode':   cmode.isEmpty   ? '0' : cmode,
+      'enable':   enable.isEmpty   ? '0' : enable,
+      'type':     type.isEmpty     ? '0' : type,
+      'default':  defCls,
+      'obw':      obw,
+      'ibw':      ibw,
+      'cmode':    cmode.isEmpty    ? '0' : cmode,
+      'ack':      ack.isEmpty      ? '0' : ack,
+      'icmp':     icmp.isEmpty     ? '0' : icmp,
+      'classify': classify.isEmpty ? '1' : classify,
+      'sched':    sched.isEmpty    ? 'fq_codel' : sched,
+      'cake_wash':cakeWash.isEmpty ? '0' : cakeWash,
+      'udp_noing':udpNoIng.isEmpty ? '0' : udpNoIng,
     };
   } catch (_) { return {}; }
 });
@@ -775,19 +787,25 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final ssh = ref.read(sshServiceProvider);
     setState(() { _saving = true; _saveMsg = null; });
     try {
-      // Build nvram set commands (no service restart - it hangs)
+      // Build nvram set commands (no service restart - it reverts nvram on FreshTomato)
+      final obwVal = obw.isNotEmpty ? obw : '0';
+      final ibwVal = ibw.isNotEmpty ? ibw : '0';
       final cmds = [
         'nvram set qos_enable=${enabled ? 1 : 0}',
         'nvram set qos_type=$type',
-        if (type == '0' && defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
+        'nvram set qos_default=$defaultClass',
         if (type == '3') 'nvram set qos_cmode=$cmode',
-        'nvram set qos_obw=${obw.isNotEmpty ? obw : '0'}',
-        'nvram set qos_ibw=${ibw.isNotEmpty ? ibw : '0'}',
+        if (type == '3' && sched.isNotEmpty) 'nvram set qos_sched=$sched',
+        if (type == '3') 'nvram set qos_cake_wash=${cakeWash ? 1 : 0}',
+        'nvram set qos_obw=$obwVal',
+        'nvram set qos_ibw=$ibwVal',
+        'nvram set qos_ackfilter=${ack ? 1 : 0}',
+        'nvram set qos_icmp=${icmp ? 1 : 0}',
+        'nvram set qos_classify=${classify ? 1 : 0}',
+        'nvram set qos_udp=${udpNoIng ? 1 : 0}',
         'nvram commit',
       ].join(' && ');
       await ssh.run(cmds);
-      // NOTE: Do NOT restart QoS service - on FreshTomato it REVERTS nvram values
-      // Changes take effect on next router restart or manual QoS toggle in web UI
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
       setState(() { _saveMsg = 'Saved!'; });
@@ -800,33 +818,42 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
 
   void _showEditDialog(BuildContext ctx, Map<String, String> d) {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
-    bool enabled  = (d['enable'] ?? '0') == '1';
-    // FreshTomato: 0=HTB classic, 3=CAKE AQM
-    String rawType = d['type'] ?? '0';
-    String type = (rawType == '3') ? '3' : '0';
-    String cmode = d['cmode'] ?? '0';
-    String obw  = d['obw'] ?? '';
-    String ibw  = d['ibw'] ?? '';
-
-    // HTB default class - FreshTomato standard names
-    const classOptions = [
-      'Service','VOIP/Game','Remote','WWW','Media',
-      'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl',
-    ];
+    bool enabled   = (d['enable']   ?? '0') == '1';
+    bool ack       = (d['ack']      ?? '0') == '1';
+    bool icmp      = (d['icmp']     ?? '0') == '1';
+    bool classify  = (d['classify'] ?? '1') == '1';
+    bool cakeWash  = (d['cake_wash']?? '0') == '1';
+    bool udpNoIng  = (d['udp_noing']?? '0') == '1';
+    String type    = (d['type'] ?? '0') == '3' ? '3' : '0';
+    String cmode   = d['cmode'] ?? '0';
+    String sched   = d['sched'] ?? 'fq_codel';
+    String obw     = d['obw'] ?? '';
+    String ibw     = d['ibw'] ?? '';
+    const classOpts = ['Service','VOIP/Game','Remote','WWW','Media',
+        'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
     final rawDef = d['default'] ?? '';
-    String defClass = classOptions.contains(rawDef) ? rawDef : 'Service';
-
-    // CAKE mode options (qos_cmode nvram key)
-    const cakeModes = [
+    String defClass = classOpts.contains(rawDef) ? rawDef : 'Service';
+    const cakeModeList = [
       MapEntry('0', 'Single class [besteffort]'),
       MapEntry('1', '8 priority [diffserv8] - DSCP'),
       MapEntry('2', '4 priority [diffserv4] - DSCP'),
       MapEntry('3', '3 priority [diffserv3] - DSCP'),
       MapEntry('4', '8 priority [precedence] - ToS'),
     ];
-
+    const schedOpts = ['fq_codel','sfq','tbf','pfifo','bfifo','cake'];
     final obwCtrl = TextEditingController(text: obw);
     final ibwCtrl = TextEditingController(text: ibw);
+    InputDecoration dec(String l) => InputDecoration(
+        labelText: l, border: const OutlineInputBorder(), isDense: true);
+    Widget chk(String label, bool val, Function(bool) cb) =>
+      InkWell(onTap: () => cb(!val), child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(children: [
+          SizedBox(width: 24, height: 24, child: Checkbox(value: val,
+            activeColor: accent, onChanged: (v) => cb(v ?? false))),
+          const SizedBox(width: 8),
+          Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
+        ])));
 
     showDialog(
       context: ctx,
@@ -834,70 +861,70 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         builder: (dCtx, setS) => AlertDialog(
           backgroundColor: Theme.of(ctx).colorScheme.surface,
           title: const Text('QoS Settings'),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              // Enable toggle
+          content: SizedBox(width: double.maxFinite, child: SingleChildScrollView(
+            child: Column(mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start, children: [
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                const Text('QoS Enabled'),
+                const Text('QoS Enabled', style: TextStyle(fontWeight: FontWeight.w500)),
                 Switch(value: enabled, activeColor: accent,
                   onChanged: (v) => setS(() => enabled = v)),
               ]),
-              const SizedBox(height: 14),
-              // Mode: HTB or CAKE AQM only
+              const SizedBox(height: 12),
               DropdownButtonFormField<String>(
                 value: type,
-                decoration: const InputDecoration(labelText: 'Mode', border: OutlineInputBorder()),
+                decoration: dec('QoS Mode'),
                 items: const [
                   DropdownMenuItem(value: '0', child: Text('HTB (classic)')),
                   DropdownMenuItem(value: '3', child: Text('CAKE AQM')),
                 ],
-                onChanged: (v) => setS(() { type = v ?? '0'; }),
+                onChanged: (v) => setS(() => type = v ?? '0'),
               ),
-              const SizedBox(height: 14),
-              // HTB: show Default Class dropdown
-              if (type == '0') ...[
-                DropdownButtonFormField<String>(
-                  value: defClass,
-                  isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'Default Class', border: OutlineInputBorder()),
-                  items: classOptions.map((o) =>
-                    DropdownMenuItem(value: o, child: Text(o))).toList(),
-                  onChanged: (v) => setS(() => defClass = v ?? 'Service'),
-                ),
-                const SizedBox(height: 14),
-              ],
-              // CAKE AQM: show CAKE mode dropdown
+              const SizedBox(height: 10),
+              StatefulBuilder(builder: (_, ss) => Column(children: [
+                chk('Prioritize small packets (ACK/SYN/FIN/RST)', ack,
+                  (v) => setS(() => ack = v)),
+                chk('Prioritize ICMP', icmp, (v) => setS(() => icmp = v)),
+                chk('Classify traffic', classify, (v) => setS(() => classify = v)),
+                chk('No Ingress QoS for UDP', udpNoIng, (v) => setS(() => udpNoIng = v)),
+              ])),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                value: defClass, isExpanded: true,
+                decoration: dec('Default Class'),
+                items: classOpts.map((o) =>
+                  DropdownMenuItem(value: o, child: Text(o))).toList(),
+                onChanged: (v) => setS(() => defClass = v ?? 'Service'),
+              ),
+              const SizedBox(height: 12),
               if (type == '3') ...[
                 DropdownButtonFormField<String>(
-                  value: cakeModes.any((e) => e.key == cmode) ? cmode : '0',
+                  value: cakeModeList.any((e) => e.key == cmode) ? cmode : '0',
                   isExpanded: true,
-                  decoration: const InputDecoration(labelText: 'CAKE Mode', border: OutlineInputBorder()),
-                  items: cakeModes.map((e) => DropdownMenuItem(
+                  decoration: dec('CAKE Mode'),
+                  items: cakeModeList.map((e) => DropdownMenuItem(
                     value: e.key,
-                    child: Text(e.value, style: const TextStyle(fontSize: 13)))).toList(),
+                    child: Text(e.value, style: const TextStyle(fontSize: 12)))).toList(),
                   onChanged: (v) => setS(() => cmode = v ?? '0'),
                 ),
-                const SizedBox(height: 14),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: schedOpts.contains(sched) ? sched : 'fq_codel',
+                  decoration: dec('Qdisc Scheduler'),
+                  items: schedOpts.map((o) =>
+                    DropdownMenuItem(value: o, child: Text(o))).toList(),
+                  onChanged: (v) => setS(() => sched = v ?? 'fq_codel'),
+                ),
+                const SizedBox(height: 4),
+                chk('CAKE Wash (clear diffserv inbound)', cakeWash,
+                  (v) => setS(() => cakeWash = v)),
+                const SizedBox(height: 12),
               ],
-              // Upload bandwidth
-              TextField(
-                controller: obwCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Upload Bandwidth (kbit/s)',
-                  border: OutlineInputBorder(), hintText: 'e.g. 10000'),
-              ),
-              const SizedBox(height: 14),
-              // Download bandwidth
-              TextField(
-                controller: ibwCtrl,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(
-                  labelText: 'Download Bandwidth (kbit/s)',
-                  border: OutlineInputBorder(), hintText: 'e.g. 50000'),
-              ),
-            ]),
-          ),
+              TextField(controller: obwCtrl, keyboardType: TextInputType.number,
+                decoration: dec('Upload / Outbound Bandwidth (kbit/s)')),
+              const SizedBox(height: 12),
+              TextField(controller: ibwCtrl, keyboardType: TextInputType.number,
+                decoration: dec('Download / Inbound Bandwidth (kbit/s)')),
+            ]))),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Cancel')),
             ElevatedButton(
@@ -905,9 +932,10 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
               onPressed: () {
                 Navigator.pop(dCtx);
                 _save(d,
-                  enabled: enabled, type: type, cmode: cmode,
+                  enabled: enabled, type: type, cmode: cmode, sched: sched,
                   obw: obwCtrl.text.trim(), ibw: ibwCtrl.text.trim(),
-                  defaultClass: type == '0' ? defClass : '');
+                  defaultClass: defClass, ack: ack, icmp: icmp,
+                  classify: classify, cakeWash: cakeWash, udpNoIng: udpNoIng);
               },
               child: const Text('Apply', style: TextStyle(color: Colors.white)),
             ),
@@ -1375,14 +1403,21 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                 const SizedBox(height: 12),
                 Text('No QoS rules configured', style: TextStyle(color: c.textMuted)),
               ]))
-            : ListView.separated(
+            : ReorderableListView.builder(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
                 itemCount: displayList.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
+                onReorder: (oldIdx, newIdx) {
+                  if (newIdx > oldIdx) newIdx--;
+                  final updated = List<Map<String,String>>.from(displayList);
+                  final item = updated.removeAt(oldIdx);
+                  updated.insert(newIdx, item);
+                  _saveRules(updated);
+                },
                 itemBuilder: (_, i) {
                   final r     = displayList[i];
-                  final prio  = r['prio'] ?? '5';
+                  final prio  = r['prio'] ?? '0';
                   final color = prioColors[prio] ?? accent;
+                  final itemKey = ValueKey('rule_${i}_${r['rawDesc'] ?? i}');
                   final portInfo = r['portDisplay']?.isNotEmpty == true && r['portDisplay'] != 'Any'
                       ? 'Port: ${r['portDisplay']}' : '';
                   final xferInfo = r['xferDisplay']?.isNotEmpty == true ? r['xferDisplay']! : '';
@@ -1391,6 +1426,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                   final className = r['className'] ?? '';
 
                   return AppCard(
+                    key: itemKey,
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                     child: Row(children: [
                       // Priority badge
@@ -1415,7 +1451,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                         Text(subtitle,
                             style: TextStyle(fontSize: 11, color: c.textMuted)),
                       ])),
-                      // Edit & delete
+                      // Edit, delete, drag handle
                       IconButton(
                         icon: Icon(Icons.edit_outlined, size: 18, color: accent),
                         onPressed: () => _showRuleDialog(context, displayList, existing: r, index: i),
@@ -1428,6 +1464,12 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                         onPressed: () => _deleteRule(displayList, i, context),
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
+                      ),
+                      const SizedBox(width: 2),
+                      ReorderableDragStartListener(
+                        index: i,
+                        child: Icon(Icons.drag_handle,
+                          size: 20, color: Theme.of(context).extension<AppColors>()!.textMuted),
                       ),
                     ]),
                   );
