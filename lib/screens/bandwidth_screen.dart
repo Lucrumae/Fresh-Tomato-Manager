@@ -818,10 +818,11 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         'nvram set qos_type=$type',
         if (type == '0' && defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
         if (type == '3') 'nvram set qos_cmode=$cmode',
-        if (obw.isNotEmpty) 'nvram set qos_obw=$obw',
-        if (ibw.isNotEmpty) 'nvram set qos_ibw=$ibw',
+        // Always save bandwidth even if empty (clear old value)
+        'nvram set qos_obw=${obw.isNotEmpty ? obw : '0'}',
+        'nvram set qos_ibw=${ibw.isNotEmpty ? ibw : '0'}',
         'nvram commit',
-        'service qos restart 2>/dev/null || true',
+        'service qos restart 2>/dev/null || service restart_qos 2>/dev/null || true',
       ].join(' && ');
       await ssh.run(cmds);
       ref.invalidate(qosBasicProvider);
@@ -968,10 +969,28 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
       '4': '8 priority [precedence]',
     };
 
+    // Use previousData to avoid flicker on refresh
+    final basicData = basic.valueOrNull ?? basic.asData?.value ?? {};
+    final isFirstLoad = basicData.isEmpty && basic.isLoading;
+    if (isFirstLoad) return const Center(child: CircularProgressIndicator());
+
     return basic.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
-      data: (d) {
+      loading: () {
+        // Use last known data while refreshing - no spinner
+        if (basicData.isNotEmpty) {
+          return _buildBasicContent(context, basicData, accent, c, modeMap, cakeModeMap);
+        }
+        return const Center(child: CircularProgressIndicator());
+      },
+      error: (e, _) => basicData.isNotEmpty
+          ? _buildBasicContent(context, basicData, accent, c, modeMap, cakeModeMap)
+          : Center(child: Text('Error: $e')),
+      data: (d) => _buildBasicContent(context, basicData.isEmpty ? d : d, accent, c, modeMap, cakeModeMap),
+    );
+  }
+
+  Widget _buildBasicContent(BuildContext context, Map<String, String> d,
+      Color accent, AppColors c, Map<String,String> modeMap, Map<String,String> cakeModeMap) {
         final enabled = (d['enable'] ?? '0') == '1';
         return ListView(padding: const EdgeInsets.all(16), children: [
           if (_saveMsg != null)
@@ -1028,13 +1047,11 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
                   valueColor: accent),
               _QRow(
                   label: 'Download Limit',
-                  value: (d['ibw']?.isNotEmpty == true) ? '${d['ibw']} kbit/s' : 'Not set',
+                  value: (d['ibw']?.isNotEmpty == true && d['ibw'] != '0') ? '${d['ibw']} kbit/s' : 'Not set',
                   valueColor: accent),
             ]),
           ),
         ]);
-      },
-    );
   }
 }
 
@@ -1069,23 +1086,31 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     try {
       // Encode each rule back to FreshTomato nvram format
       // FreshTomato: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable>...
-      const protoToNum = {'Any':'0','any':'0','TCP':'6','tcp':'6','UDP':'17','udp':'17','TCP/UDP':'256','ICMP':'1','icmp':'1'};
+      // Encode rule to FreshTomato nvram format
+      // Format: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable
+      // IMPORTANT: proto '0'(any) can't be used with port matching in iptables
+      // If port is specified, use '256' (TCP/UDP) to avoid --port iptables error
+      const p2n = {'Any':'0','any':'0','TCP':'6','tcp':'6','UDP':'17','udp':'17','TCP/UDP':'256','ICMP':'1','icmp':'1'};
       String encRule(Map<String, String> r) {
         final rawProto = r['proto'] ?? '0';
-        final protoNum = protoToNum[rawProto] ?? rawProto;
+        String protoNum = p2n[rawProto] ?? rawProto;
         final p1  = (r['port1']?.isNotEmpty == true && r['port1'] != '0') ? r['port1']! : '';
         final p2  = (r['port2']?.isNotEmpty == true && r['port2'] != '0') ? r['port2']! : p1;
-        final kb1 = r['kb1'] ?? '0';
-        final kb2 = r['kb2'] ?? '0';
+        // If port set but proto=0(any), use 256(TCP+UDP) - iptables requires specific proto for port matching
+        if (p1.isNotEmpty && protoNum == '0') protoNum = '256';
+        final kb1 = r['kb1']?.isNotEmpty == true ? r['kb1']! : '0';
+        final kb2 = r['kb2']?.isNotEmpty == true ? r['kb2']! : '-1';
         final prio = r['prio'] ?? '5';
         final src  = r['src'] ?? '';
         final dst  = r['dst'] ?? '';
         final desc = (r['rawDesc']?.isNotEmpty == true) ? r['rawDesc']! : (r['desc'] ?? '');
         return '$src<$dst<$protoNum<$p1<$p2<$kb1<$kb2<$prio<0<0<$desc<1';
       }
-      // FreshTomato: each rule ends with > (including last)
+      // FreshTomato: rules separated AND terminated by >
       final encoded = rules.map(encRule).join('>') + '>';
-      await ssh.run("nvram set qos_orules='$encoded' && nvram commit && service qos restart 2>/dev/null || true");
+      // Use nvram + service qos restart (not iptables directly)
+      await ssh.run("nvram set qos_orules='\$encoded' && nvram commit && service qos restart 2>/dev/null || service restart_qos 2>/dev/null || true");
+
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(
@@ -1305,12 +1330,13 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
       '7': c.textMuted,
     };
 
-    return rules.when(
-      loading: () => const Center(child: CircularProgressIndicator()),
-      error: (e, _) => Center(child: Text('Error: $e')),
-      data: (list) {
-        return Stack(children: [
-          list.isEmpty
+    final listData = rules.valueOrNull ?? [];
+    if (listData.isEmpty && rules.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    final displayList = rules.asData?.value ?? listData;
+    return Stack(children: [
+          displayList.isEmpty
             ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                 Icon(Icons.rule_folder_outlined, size: 48, color: c.textMuted),
                 const SizedBox(height: 12),
@@ -1318,10 +1344,10 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
               ]))
             : ListView.separated(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
-                itemCount: list.length,
+                itemCount: displayList.length,
                 separatorBuilder: (_, __) => const SizedBox(height: 8),
                 itemBuilder: (_, i) {
-                  final r     = list[i];
+                  final r     = displayList[i];
                   final prio  = r['prio'] ?? '5';
                   final color = prioColors[prio] ?? accent;
                   final portInfo = r['portDisplay']?.isNotEmpty == true && r['portDisplay'] != 'Any'
@@ -1359,14 +1385,14 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                       // Edit & delete
                       IconButton(
                         icon: Icon(Icons.edit_outlined, size: 18, color: accent),
-                        onPressed: () => _showRuleDialog(context, list, existing: r, index: i),
+                        onPressed: () => _showRuleDialog(context, displayList, existing: r, index: i),
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
                       ),
                       const SizedBox(width: 2),
                       IconButton(
                         icon: Icon(Icons.delete_outline, size: 18, color: AppTheme.danger),
-                        onPressed: () => _deleteRule(list, i, context),
+                        onPressed: () => _deleteRule(displayList, i, context),
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
                       ),
@@ -1380,7 +1406,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
             child: FloatingActionButton.extended(
               heroTag: 'addRule',
               backgroundColor: accent,
-              onPressed: _saving ? null : () => _showRuleDialog(context, list),
+              onPressed: _saving ? null : () => _showRuleDialog(context, displayList),
               icon: _saving
                 ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.add, color: Colors.white),
@@ -1389,8 +1415,6 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
             ),
           ),
         ]);
-      },
-    );
   }
 }
 

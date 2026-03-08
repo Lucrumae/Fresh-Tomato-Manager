@@ -120,58 +120,61 @@ nvram get os_version
   }
 
   // Fast poll - only CPU/RAM/temp, reuses existing nvram fields from [current]
+  // CPU jiffies from previous sample - used to compute delta for accurate %
+  List<int> _prevCpuJiffies = [];
+
   Future<RouterStatus> getStatusFast(RouterStatus current) async {
     try {
-      final output = await run(r'''
-echo "=CPU="
-cat /proc/stat | head -1
-echo "=MEM="
-cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|^Cached"
-echo "=TEMP="
-( cat /proc/dmu/temperature 2>/dev/null | grep -oE '[0-9]+' | tail -1 ) || ( cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null ) || ( cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null ) || echo 0
-''');
-      final sections = _parseSections(output);
+      // Use separate commands - most reliable, no raw string escaping issues
+      final cpuRaw  = (await run('cat /proc/stat | head -1')).trim();
+      final memRaw  = (await run('cat /proc/meminfo | grep -E "MemTotal|MemFree|Buffers|Cached"')).trim();
+      final tempRaw = (await run(
+        'cat /proc/dmu/temperature 2>/dev/null || '
+        'cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || '
+        'cat /sys/class/hwmon/hwmon0/temp1_input 2>/dev/null || echo 0'
+      )).trim();
 
-      // CPU
+      // CPU: use delta between samples for accurate per-interval %
+      // /proc/stat line: cpu user nice system idle iowait irq softirq steal...
       double cpuPercent = current.cpuPercent;
-      final cpuLine = sections['CPU']?.firstOrNull ?? '';
-      final cpuParts = cpuLine.split(RegExp(r'\s+'));
+      final cpuParts = cpuRaw.split(RegExp(r'\s+'));
       if (cpuParts.length >= 5) {
-        final user   = int.tryParse(cpuParts[1]) ?? 0;
-        final nice   = int.tryParse(cpuParts[2]) ?? 0;
-        final system = int.tryParse(cpuParts[3]) ?? 0;
-        final idle   = int.tryParse(cpuParts[4]) ?? 0;
-        final total  = user + nice + system + idle;
-        if (total > 0) cpuPercent = (user + nice + system) / total * 100;
+        final jiffies = cpuParts.skip(1).take(8)
+            .map((s) => int.tryParse(s) ?? 0).toList();
+        if (_prevCpuJiffies.length == jiffies.length) {
+          final deltas = List.generate(jiffies.length, (i) =>
+              (jiffies[i] - _prevCpuJiffies[i]).clamp(0, 999999));
+          final idleDelta   = deltas[3] + (deltas.length > 4 ? deltas[4] : 0); // idle+iowait
+          final totalDelta  = deltas.fold(0, (a, b) => a + b);
+          if (totalDelta > 0) cpuPercent = (1 - idleDelta / totalDelta) * 100;
+        }
+        _prevCpuJiffies = jiffies;
       }
 
       // RAM
       int memTotal = current.ramTotalMB * 1024;
       int memFree = 0, memBuffers = 0, memCached = 0;
-      for (final line in sections['MEM'] ?? []) {
-        final p = line.split(RegExp(r'\s+'));
+      for (final line in memRaw.split('\n')) {
+        final p = line.trim().split(RegExp(r'\s+'));
         if (p.length >= 2) {
           final val = int.tryParse(p[1]) ?? 0;
-          if (line.startsWith('MemTotal'))   memTotal   = val;
-          if (line.startsWith('MemFree'))    memFree    = val;
-          if (line.startsWith('Buffers'))    memBuffers = val;
-          if (line.startsWith('Cached'))     memCached  = val;
+          if (line.startsWith('MemTotal'))  memTotal   = val;
+          if (line.startsWith('MemFree'))   memFree    = val;
+          if (line.startsWith('Buffers'))   memBuffers = val;
+          if (line.startsWith('Cached') && !line.startsWith('SwapCached')) memCached = val;
         }
       }
-      final memUsed = memTotal - memFree - memBuffers - memCached;
+      final memUsed = (memTotal - memFree - memBuffers - memCached).clamp(0, memTotal);
 
-      // Temp
+      // Temp: strip non-numeric prefix, handle millidegrees
       double cpuTempC = current.cpuTempC;
-      final tempLines = sections['TEMP'] ?? [];
-      for (final tl in tempLines) {
-        final cleaned = tl.replaceAll(RegExp(r'[a-zA-Z:=\s]+'), '').trim();
-        final tempVal = double.tryParse(cleaned) ?? 0;
-        if (tempVal > 1000) { cpuTempC = tempVal / 1000; break; }
-        else if (tempVal > 0) { cpuTempC = tempVal; break; }
-      }
+      final tempStr = tempRaw.split('\n').first.replaceAll(RegExp(r'[^0-9.]'), '').trim();
+      final tempVal = double.tryParse(tempStr) ?? 0;
+      if (tempVal > 1000) cpuTempC = tempVal / 1000;
+      else if (tempVal > 0) cpuTempC = tempVal;
 
       return RouterStatus(
-        cpuPercent:  cpuPercent.clamp(0, 100),
+        cpuPercent:  cpuPercent.clamp(0.0, 100.0),
         ramUsedMB:   (memUsed / 1024).round(),
         ramTotalMB:  (memTotal / 1024).round(),
         uptime:      current.uptime,

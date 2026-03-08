@@ -1,0 +1,393 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import '../theme/app_theme.dart';
+import '../services/app_state.dart';
+import '../models/models.dart';
+
+class DashboardScreen extends ConsumerWidget {
+  const DashboardScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(routerStatusProvider);
+    final bandwidth = ref.watch(bandwidthProvider);
+    final devices = ref.watch(devicesProvider);
+
+    return Scaffold(
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+      body: CustomScrollView(
+        slivers: [
+          // App Bar
+          SliverAppBar(
+            floating: true,
+            backgroundColor: Theme.of(context).colorScheme.surface,
+            title: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Dashboard', style: Theme.of(context).textTheme.titleLarge),
+                Text(status.routerModel,
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ],
+            ),
+            actions: [
+              Container(
+                margin: const EdgeInsets.only(right: 16),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: status.isOnline
+                    ? AppTheme.success.withOpacity(0.1)
+                    : AppTheme.danger.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 7, height: 7,
+                      decoration: BoxDecoration(
+                        color: status.isOnline ? AppTheme.success : AppTheme.danger,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      status.isOnline ? 'Online' : 'Offline',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: status.isOnline ? AppTheme.success : AppTheme.danger,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+
+          SliverPadding(
+            padding: const EdgeInsets.all(16),
+            sliver: SliverList(delegate: SliverChildListDelegate([
+
+              //  Status cards row 
+              Builder(builder: (bCtx) {
+                final acc = Theme.of(bCtx).extension<AppColors>()?.accent;
+                return Row(children: [
+                  Expanded(child: _StatCard(
+                    label: 'CPU',
+                    value: status.cpuUsage,
+                    sublabel: status.cpuTempC > 0 ? status.cpuTemp : null,
+                    sublabelColor: status.cpuTempC >= 70 ? AppTheme.danger
+                      : status.cpuTempC >= 50 ? AppTheme.warning : AppTheme.success,
+                    percent: status.cpuPercent / 100,
+                    color: _percentColor(status.cpuPercent, acc),
+                    icon: Icons.memory_rounded,
+                  )),
+                  const SizedBox(width: 12),
+                  Expanded(child: _StatCard(
+                    label: 'RAM',
+                    value: status.ramUsage,
+                    sublabel: '/ ${status.ramTotal}',
+                    percent: status.ramPercent / 100,
+                    color: _percentColor(status.ramPercent, acc),
+                    icon: Icons.storage_rounded,
+                  )),
+                ]);
+              }),
+              const SizedBox(height: 12),
+
+              //  Bandwidth quick view 
+              _BandwidthCard(bandwidth: bandwidth)
+                ,
+              const SizedBox(height: 12),
+
+              //  Network info 
+              AppCard(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Network', style: Theme.of(context).textTheme.titleSmall),
+                    const SizedBox(height: 14),
+                    _InfoRow(icon: Icons.language_rounded, label: 'WAN IP', value: status.wanIp),
+                    const SizedBox(height: 10),
+                    _InfoRow(icon: Icons.home_rounded, label: 'LAN IP', value: status.lanIp),
+                    const SizedBox(height: 10),
+                    _InfoRow(icon: Icons.wifi_rounded, label: 'WiFi SSID', value: status.wifiSsid),
+                    const SizedBox(height: 10),
+                    _InfoRow(icon: Icons.schedule_rounded, label: 'Uptime', value: status.uptime),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+
+              //  Quick stats 
+              Row(children: [
+                Expanded(child: _QuickStat(
+                  icon: Icons.devices_rounded,
+                  value: '${devices.length}',
+                  label: 'Devices',
+                  color: AppTheme.primary,
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: _QuickStat(
+                  icon: Icons.block_rounded,
+                  value: '${devices.where((d) => d.isBlocked).length}',
+                  label: 'Blocked',
+                  color: AppTheme.danger,
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: _QuickStat(
+                  icon: Icons.wifi_rounded,
+                  value: '${devices.where((d) => d.isWireless).length}',
+                  label: 'WiFi',
+                  color: AppTheme.success,
+                )),
+              ]),
+              const SizedBox(height: 12),
+
+              //  Firmware 
+              AppCard(
+                child: Row(
+                  children: [
+                    Container(
+                      width: 40, height: 40,
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryLight,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Icon(Icons.system_update_rounded, color: AppTheme.primary, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Firmware', style: Theme.of(context).textTheme.titleSmall),
+                        Text(status.firmware, style: Theme.of(context).textTheme.bodySmall),
+                      ],
+                    )),
+                  ],
+                ),
+              ),
+
+              const SizedBox(height: 80),
+            ])),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Color _percentColor(double p, [Color? accent]) {
+    if (p > 80) return AppTheme.danger;
+    if (p > 60) return AppTheme.warning;
+    return accent ?? AppTheme.success;
+  }
+}
+
+class _StatCard extends StatelessWidget {
+  final String label, value;
+  final String? sublabel;
+  final Color? sublabelColor;
+  final double percent;
+  final Color color;
+  final IconData icon;
+
+  const _StatCard({
+    required this.label, required this.value, this.sublabel,
+    this.sublabelColor,
+    required this.percent, required this.color, required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(icon, size: 16, color: Theme.of(context).extension<AppColors>()!.textSecondary),
+            const SizedBox(width: 6),
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+          ]),
+          const SizedBox(height: 10),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(value, style: Theme.of(context).textTheme.titleLarge),
+              if (sublabel != null)
+                Row(children: [
+                  if (sublabelColor != null)
+                    Icon(Icons.thermostat_rounded, size: 12, color: sublabelColor),
+                  Text(sublabel!,
+                    style: sublabelColor != null
+                      ? TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: sublabelColor)
+                      : Theme.of(context).textTheme.bodySmall),
+                ]),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _AnimatedBar(percent: percent.clamp(0.0, 1.0), color: color),
+        ],
+      ),
+    );
+  }
+}
+
+class _BandwidthCard extends StatelessWidget {
+  final BandwidthStats bandwidth;
+  const _BandwidthCard({required this.bandwidth});
+
+  @override
+  Widget build(BuildContext context) {
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Bandwidth', style: Theme.of(context).textTheme.titleSmall),
+              Text('Live', style: TextStyle(
+                fontSize: 11, color: AppTheme.success, fontWeight: FontWeight.w600,
+              )),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(children: [
+            Expanded(child: _BwStat(
+              label: 'Down Download',
+              value: _fmt(bandwidth.currentRx),
+              color: Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary,
+            )),
+            Expanded(child: _BwStat(
+              label: 'Up Upload',
+              value: _fmt(bandwidth.currentTx),
+              color: AppTheme.secondary,
+            )),
+          ]),
+        ],
+      ),
+    );
+  }
+
+  String _fmt(double kbps) {
+    if (kbps >= 1024) return '${(kbps / 1024).toStringAsFixed(1)} Mbps';
+    return '${kbps.toStringAsFixed(0)} Kbps';
+  }
+}
+
+class _BwStat extends StatelessWidget {
+  final String label, value;
+  final Color color;
+  const _BwStat({required this.label, required this.value, required this.color});
+
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      Text(label, style: Theme.of(context).textTheme.bodySmall),
+      const SizedBox(height: 4),
+      Text(value, style: TextStyle(
+        fontSize: 20, fontWeight: FontWeight.w700, color: color,
+      )),
+    ],
+  );
+}
+
+class _InfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label, value;
+  const _InfoRow({required this.icon, required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) => Row(
+    children: [
+      Icon(icon, size: 16, color: Theme.of(context).extension<AppColors>()!.textMuted),
+      const SizedBox(width: 10),
+      Expanded(child: Text(label, style: Theme.of(context).textTheme.bodyMedium)),
+      Text(value, style: Theme.of(context).textTheme.labelLarge),
+    ],
+  );
+}
+
+// Smooth animated progress bar - properly tracks value changes
+class _AnimatedBar extends StatefulWidget {
+  final double percent;
+  final Color color;
+  const _AnimatedBar({required this.percent, required this.color});
+  @override
+  State<_AnimatedBar> createState() => _AnimatedBarState();
+}
+
+class _AnimatedBarState extends State<_AnimatedBar>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+  double _prev = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _prev = widget.percent;
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 250));
+    _anim = Tween(begin: widget.percent, end: widget.percent).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void didUpdateWidget(_AnimatedBar old) {
+    super.didUpdateWidget(old);
+    if ((widget.percent - _prev).abs() > 0.001) {
+      _anim = Tween(begin: _prev, end: widget.percent).animate(
+          CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+      _ctrl.forward(from: 0);
+      _prev = widget.percent;
+    }
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _anim,
+    builder: (_, __) => Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(4),
+          child: LinearProgressIndicator(
+            value: _anim.value,
+            backgroundColor: AppTheme.border,
+            valueColor: AlwaysStoppedAnimation(widget.color),
+            minHeight: 6,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text('${(_anim.value * 100).toStringAsFixed(1)}%',
+          style: TextStyle(fontSize: 11, color: widget.color,
+              fontWeight: FontWeight.w600)),
+      ],
+    ),
+  );
+}
+
+class _QuickStat extends StatelessWidget {
+  final IconData icon;
+  final String value, label;
+  final Color color;
+  const _QuickStat({required this.icon, required this.value, required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) => AppCard(
+    child: Column(
+      children: [
+        Icon(icon, color: color, size: 22),
+        const SizedBox(height: 6),
+        Text(value, style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: color)),
+        Text(label, style: Theme.of(context).textTheme.bodySmall),
+      ],
+    ),
+  );
+}
