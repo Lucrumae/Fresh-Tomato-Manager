@@ -126,7 +126,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     final confirm = await _confirm(
       'Restore Configuration',
-      'This will overwrite router settings and reboot. Continue?',
+      'This will overwrite router settings. '
+      'Router will NOT reboot automatically - reboot manually after. Continue?',
       confirmColor: AppTheme.warning,
       confirmLabel: 'Restore',
     );
@@ -155,100 +156,66 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (eqIdx < 1) continue;
           final key = trimmed.substring(0, eqIdx);
           final val = trimmed.substring(eqIdx + 1);
-          // Skip hardware read-only keys
           if (key.startsWith('wl') && key.contains('_hwaddr')) continue;
           if (key == 'et0macaddr' || key == 'il0macaddr') continue;
           final escapedVal = val.replaceAll("'", "'\''");
           cmds.add("nvram set '$key'='$escapedVal'");
           restored++;
         }
-        // Kirim 20 set per SSH call
         const batch = 20;
         for (var i = 0; i < cmds.length; i += batch) {
           final end = (i + batch) > cmds.length ? cmds.length : (i + batch);
           await ssh.run(cmds.sublist(i, end).join(' && '));
         }
+        await ssh.run('nvram commit');
       } else {
-        // Format binary (web UI cfg) - upload via HTTP server lalu nvram restore
-        // HP buka HTTP server, router wget download file dari HP
-        final httpServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
-        final port = httpServer.port;
-        final localIp = await _getLocalIp();
-        if (localIp == null) {
-          await httpServer.close(force: true);
-          throw Exception('Cannot determine local IP address');
-        }
+        // Format binary - upload via dd SSH stdin (sama dengan file manager)
+        if (ssh.client == null) throw Exception('SSH client not available');
 
-        // Serve file sekali
-        var served = false;
-        httpServer.listen((req) async {
-          if (served) { req.response.statusCode = 410; req.response.close(); return; }
-          served = true;
-          req.response.contentLength = fileBytes.length;
-          req.response.add(fileBytes);
-          await req.response.flush();
-          await req.response.close();
-        });
-
-        // Router download file dari HP
         await ssh.run('rm -f /tmp/tomato.cfg');
-        await ssh.run(
-          'wget -q --timeout=60 -O /tmp/tomato.cfg http://$localIp:$port/cfg '
-          '2>/dev/null || '
-          'curl -s --max-time 60 -o /tmp/tomato.cfg http://$localIp:$port/cfg '
-          '2>/dev/null'
+        final session = await ssh.client!.execute(
+          "dd of='/tmp/tomato.cfg' bs=65536"
         );
-        await httpServer.close(force: true);
 
-        // Verifikasi ukuran
-        final gotSize = int.tryParse(
-          (await ssh.run('wc -c < /tmp/tomato.cfg 2>/dev/null || echo 0')).trim()) ?? 0;
-        if (gotSize < fileBytes.length - 1024) {
-          throw Exception('Upload incomplete: $gotSize / ${fileBytes.length} bytes');
+        // Stream file bytes langsung ke SSH stdin
+        int sent = 0;
+        final total = fileBytes.length;
+        const chunk = 65536;
+        while (sent < total) {
+          final end = (sent + chunk) > total ? total : (sent + chunk);
+          session.stdin.add(fileBytes.sublist(sent, end));
+          sent = end;
+          await Future.delayed(Duration.zero);
         }
+        await session.stdin.close();
+        await session.done;
 
-        // Verifikasi integrity: bandingkan MD5 file di router vs file asli di HP
-        // Ini lebih reliable dari cek format karena langsung deteksi korupsi transfer
-        final routerMd5Raw = (await ssh.run(
+        // Verifikasi MD5
+        final routerMd5 = (await ssh.run(
           'md5sum /tmp/tomato.cfg 2>/dev/null || echo ""'
-        )).trim();
-        final routerMd5 = routerMd5Raw.split(' ').first;
-
-        // Hitung MD5 file asli di HP
-        final digest = md5.convert(fileBytes);
-        final localMd5 = digest.toString();
+        )).trim().split(' ').first;
+        final localMd5 = md5.convert(fileBytes).toString();
 
         if (routerMd5.isNotEmpty && routerMd5 != localMd5) {
-          // File corrupt saat transfer - upload ulang via base64 yang lebih aman
-          await ssh.run('rm -f /tmp/tomato.cfg /tmp/tomato.b64');
-          final b64 = base64Encode(fileBytes);
-          const chunkSize = 2000;
-          for (var i = 0; i < b64.length; i += chunkSize) {
-            final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
-            final chunk = b64.substring(i, end);
-            final op = i == 0 ? '>' : '>>';
-            await ssh.run("printf '%s' '$chunk' $op /tmp/tomato.b64");
-          }
-          await ssh.run('base64 -d /tmp/tomato.b64 > /tmp/tomato.cfg');
-          await ssh.run('rm -f /tmp/tomato.b64');
+          throw Exception(
+            'File integrity check failed\n'
+            'Router: $routerMd5\nLocal: $localMd5');
         }
 
-        // Restore binary cfg
+        // nvram restore lalu commit - TANPA reboot
         await ssh.run('nvram restore /tmp/tomato.cfg');
+        await ssh.run('nvram commit');
         restored = -1;
       }
 
-      // nvram commit dulu baru reboot
-      ssh.run('nvram commit && reboot').catchError((_) {});
-
       if (mounted) {
         final msg = restored > 0
-            ? 'Restored $restored keys! Router is rebooting...'
-            : 'Configuration restored! Router is rebooting...';
+            ? 'Restored $restored keys! Reboot router manually to apply.'
+            : 'Configuration restored! Reboot router manually to apply.';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(msg),
           backgroundColor: AppTheme.success,
-          duration: const Duration(seconds: 5),
+          duration: const Duration(seconds: 6),
         ));
       }
     } catch (e) {
