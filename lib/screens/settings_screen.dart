@@ -160,12 +160,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           await ssh.run("printf '%s' '$chunk' $op /tmp/restore.cfg.b64");
         }
         await ssh.run('base64 -d /tmp/restore.cfg.b64 > /tmp/tomato.cfg');
-        await ssh.run('nvram restore /tmp/tomato.cfg 2>/dev/null || true');
+        await ssh.run('nvram restore /tmp/tomato.cfg');
         await ssh.run('nvram commit');
         restored = -1;
       }
 
-      ssh.run('reboot').catchError((_) {});
+      // nvram commit dulu baru reboot (sama seperti manual)
+      ssh.run('nvram commit && reboot').catchError((_) {});
       if (mounted) {
         final msg = restored > 0
             ? 'Restored $restored keys! Router is rebooting...'
