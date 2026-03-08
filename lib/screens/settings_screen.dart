@@ -110,9 +110,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   //  Restore 
   Future<void> _restore() async {
     final ssh = ref.read(sshServiceProvider);
-    if (!ssh.isConnected) { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+    if (!ssh.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('Not connected to router'),
-        backgroundColor: AppTheme.danger)); return; }
+        backgroundColor: AppTheme.danger));
+      return;
+    }
 
     final result = await FilePicker.platform.pickFiles(
       type: FileType.any,
@@ -130,25 +133,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     setState(() => _restoreBusy = true);
     try {
-      // Baca file backup sebagai bytes dulu untuk deteksi format
       final fileBytes = await File(result.files.single.path!).readAsBytes();
 
-      // Deteksi format dari bytes:
-      // - Text (nvram show): byte pertama adalah ASCII printable
-      // - Binary (web UI cfg): dimulai dengan magic bytes non-ASCII
+      // Deteksi format: text (nvram show) atau binary (web UI cfg)
       final firstByte = fileBytes.isNotEmpty ? fileBytes[0] : 0;
       final isText = firstByte >= 32 && firstByte < 127 &&
           String.fromCharCodes(fileBytes.take(20))
               .contains(RegExp(r'^[a-zA-Z0-9_]'));
 
-      final lines = isText
-          ? utf8.decode(fileBytes, allowMalformed: true).split('\n')
-          : <String>[];
-
       int restored = 0;
+
       if (isText) {
-        // Format text (nvram show) - set tiap key satu per satu
-        // Kirim dalam batch 10 key per command untuk efisiensi
+        // Format text (backup dari app) - nvram set key=value satu per satu
+        final lines = utf8.decode(fileBytes, allowMalformed: true).split('\n');
         final cmds = <String>[];
         for (final line in lines) {
           final trimmed = line.trim();
@@ -157,7 +154,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           if (eqIdx < 1) continue;
           final key = trimmed.substring(0, eqIdx);
           final val = trimmed.substring(eqIdx + 1);
-          // Skip read-only / hardware keys
+          // Skip hardware read-only keys
           if (key.startsWith('wl') && key.contains('_hwaddr')) continue;
           if (key == 'et0macaddr' || key == 'il0macaddr') continue;
           final escapedVal = val.replaceAll("'", "'\''");
@@ -168,29 +165,55 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         const batch = 20;
         for (var i = 0; i < cmds.length; i += batch) {
           final end = (i + batch) > cmds.length ? cmds.length : (i + batch);
-          final batchCmd = cmds.sublist(i, end).join(' && ');
-          await ssh.run(batchCmd);
+          await ssh.run(cmds.sublist(i, end).join(' && '));
         }
-        await ssh.run('nvram commit');
       } else {
-        // Format binary - upload dan pakai nvram restore
-        final b64 = base64Encode(fileBytes);
-        await ssh.run('rm -f /tmp/restore.cfg.b64');
-        const chunkSize = 2000;
-        for (var i = 0; i < b64.length; i += chunkSize) {
-          final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
-          final chunk = b64.substring(i, end);
-          final op = i == 0 ? '>' : '>>';
-          await ssh.run("printf '%s' '$chunk' $op /tmp/restore.cfg.b64");
+        // Format binary (web UI cfg) - upload via HTTP server lalu nvram restore
+        // HP buka HTTP server, router wget download file dari HP
+        final httpServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+        final port = httpServer.port;
+        final localIp = await _getLocalIp();
+        if (localIp == null) {
+          await httpServer.close(force: true);
+          throw Exception('Cannot determine local IP address');
         }
-        await ssh.run('base64 -d /tmp/restore.cfg.b64 > /tmp/tomato.cfg');
+
+        // Serve file sekali
+        var served = false;
+        httpServer.listen((req) async {
+          if (served) { req.response.statusCode = 410; req.response.close(); return; }
+          served = true;
+          req.response.contentLength = fileBytes.length;
+          req.response.add(fileBytes);
+          await req.response.flush();
+          await req.response.close();
+        });
+
+        // Router download file dari HP
+        await ssh.run('rm -f /tmp/tomato.cfg');
+        await ssh.run(
+          'wget -q --timeout=60 -O /tmp/tomato.cfg http://$localIp:$port/cfg '
+          '2>/dev/null || '
+          'curl -s --max-time 60 -o /tmp/tomato.cfg http://$localIp:$port/cfg '
+          '2>/dev/null'
+        );
+        await httpServer.close(force: true);
+
+        // Verifikasi ukuran
+        final gotSize = int.tryParse(
+          (await ssh.run('wc -c < /tmp/tomato.cfg 2>/dev/null || echo 0')).trim()) ?? 0;
+        if (gotSize < fileBytes.length - 1024) {
+          throw Exception('Upload incomplete: $gotSize / ${fileBytes.length} bytes');
+        }
+
+        // Restore binary cfg
         await ssh.run('nvram restore /tmp/tomato.cfg');
-        await ssh.run('nvram commit');
         restored = -1;
       }
 
-      // nvram commit dulu baru reboot (sama seperti manual)
+      // nvram commit dulu baru reboot
       ssh.run('nvram commit && reboot').catchError((_) {});
+
       if (mounted) {
         final msg = restored > 0
             ? 'Restored $restored keys! Router is rebooting...'
@@ -213,7 +236,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) setState(() => _restoreBusy = false);
     }
   }
-
   //  NVRAM Reset 
   Future<void> _nvramReset() async {
     final ssh = ref.read(sshServiceProvider);
