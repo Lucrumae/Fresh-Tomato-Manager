@@ -1090,172 +1090,386 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
     final isEdit = existing != null;
 
-    // FreshTomato class priority names
+    // FreshTomato class priority names (0-indexed in storage, 1-indexed in display)
     const classNames = ['Service','VOIP/Game','Remote','WWW','Media','HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
 
-    // prio in storage is 0-indexed; display as 1-indexed (1=Service, 2=VOIP, etc)
+    // prio: stored 0-indexed, display 1-indexed
     final prioStored = int.tryParse(existing?['prio'] ?? '0') ?? 0;
     String prio = ((prioStored + 1).clamp(1, 10)).toString();
-    // proto stored as display string like 'TCP', 'UDP', 'Any', 'TCP/UDP'
-    String proto  = existing?['proto'] ?? 'Any';
-    // Normalize to dropdown values
-    if (!['Any','TCP','UDP','TCP/UDP','ICMP'].contains(proto)) proto = 'Any';
-    String port1  = existing?['port1'] ?? existing?['srcport'] ?? '';
-    String port2  = existing?['port2'] ?? existing?['dstport'] ?? '';
-    String src    = existing?['src']   ?? '';
-    String dst    = existing?['dst']   ?? '';
-    String desc   = existing?['rawDesc'] ?? existing?['desc'] ?? '';
-    // Clear auto-generated desc like "Rule N"
+
+    // Address type: Any Address / Dst IP / Src IP / Src MAC
+    String addrType = 'any';   // any / dst / src / mac
+    String addrVal  = existing?['dst']?.isNotEmpty == true ? existing!['dst']!
+                    : existing?['src']?.isNotEmpty == true ? existing!['src']! : '';
+    if (existing?['dst']?.isNotEmpty == true) addrType = 'dst';
+    else if (existing?['src']?.isNotEmpty == true) addrType = 'src';
+
+    // Protocol
+    String proto = existing?['proto'] ?? 'Any';
+    if (!['Any','TCP','UDP','TCP/UDP','ICMP'].contains(proto)) proto = 'TCP/UDP';
+
+    // Port type: any / dst / src / srcordst
+    String portType = 'dst';
+    String port1 = existing?['port1'] ?? '';
+    String port2 = existing?['port2'] ?? '';
+
+    // IPP2P
+    String ipp2p = 'disabled';
+    const ipp2pOptions = ['disabled','All IPP2P filters','AppleJuice','Ares','BitTorrent',
+        'Direct Connect','eDonkey','Gnutella','Kazaa','Mute','SoulSeek','Waste','WinMX','XDCC'];
+
+    // Layer 7
+    String layer7 = 'disabled';
+    const layer7Options = ['disabled','bittorrent','dns','edonkey','fasttrack','gnutella',
+        'http','imap','messenger','msnmessenger','pop3','skype','smtp','ssl','xunlei','youtube'];
+
+    // DSCP
+    String dscp = 'any';
+    const dscpOptions = ['any','BE','CS1','CS2','CS3','CS4','CS5','CS6','CS7',
+        'AF11','AF12','AF13','AF21','AF22','AF23','AF31','AF32','AF33',
+        'AF41','AF42','AF43','EF'];
+
+    // KB transferred
+    String kb1 = existing?['kb1'] ?? '0';
+    String kb2 = existing?['kb2'] ?? '-1';
+    if (kb1 == '0' && kb2 == '-1') { kb1 = ''; kb2 = ''; }
+
+    // Description
+    String desc = existing?['rawDesc'] ?? existing?['desc'] ?? '';
     if (desc.startsWith('Rule ') && int.tryParse(desc.split(' ').last) != null) desc = '';
-    String kb1    = '';
-    String kb2    = '';
 
     final descCtrl  = TextEditingController(text: desc);
+    final addrCtrl  = TextEditingController(text: addrVal);
     final port1Ctrl = TextEditingController(text: port1);
     final port2Ctrl = TextEditingController(text: port2);
-    final srcCtrl   = TextEditingController(text: src);
-    final dstCtrl   = TextEditingController(text: dst);
     final kb1Ctrl   = TextEditingController(text: kb1);
     final kb2Ctrl   = TextEditingController(text: kb2);
+
 
     showDialog(
       context: ctx,
       builder: (dCtx) => StatefulBuilder(
-        builder: (dCtx, setS) => AlertDialog(
-          backgroundColor: Theme.of(ctx).colorScheme.surface,
-          title: Text(isEdit ? 'Edit Rule' : 'Add Rule'),
-          content: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min, children: [
-              // Description
-              TextField(
-                controller: descCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Description',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. DNS, General Gaming',
-                ),
-              ),
-              const SizedBox(height: 12),
-              // Priority (class)
-              DropdownButtonFormField<String>(
-                value: prio,
-                isExpanded: true,
-                decoration: const InputDecoration(labelText: 'Class / Priority', border: OutlineInputBorder()),
-                items: List.generate(classNames.length, (i) =>
-                  DropdownMenuItem(value: '${i+1}',
-                    child: Text('Priority ${i+1} - ${classNames[i]}',
-                      style: const TextStyle(fontSize: 13)))),
-                onChanged: (v) => setS(() => prio = v ?? '5'),
-              ),
-              const SizedBox(height: 12),
-              // Protocol
-              DropdownButtonFormField<String>(
-                value: proto,
-                decoration: const InputDecoration(labelText: 'Protocol', border: OutlineInputBorder()),
-                items: const [
-                  DropdownMenuItem(value: 'Any',     child: Text('Any')),
-                  DropdownMenuItem(value: 'TCP',     child: Text('TCP')),
-                  DropdownMenuItem(value: 'UDP',     child: Text('UDP')),
-                  DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP (saved as TCP)')),
-                  DropdownMenuItem(value: 'ICMP',    child: Text('ICMP')),
-                ],
-                onChanged: (v) => setS(() => proto = v ?? 'Any'),
-              ),
-              const SizedBox(height: 12),
-              // Dst Port range (most common match)
-              Text('Destination Port Range', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<AppColors>()!.textSecondary)),
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(child: TextField(
-                  controller: port1Ctrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'From', border: OutlineInputBorder(), hintText: 'e.g. 53'),
-                )),
-                const SizedBox(width: 8),
-                const Text('-'),
-                const SizedBox(width: 8),
-                Expanded(child: TextField(
-                  controller: port2Ctrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'To', border: OutlineInputBorder(), hintText: 'e.g. 53'),
-                )),
-              ]),
-              const SizedBox(height: 12),
-              // Src/Dst Address (optional)
-              TextField(
-                controller: srcCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Src Address (optional)',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. 192.168.1.0/24',
-                ),
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: dstCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Dst Address (optional)',
-                  border: OutlineInputBorder(),
-                  hintText: 'e.g. 0.0.0.0/0',
-                ),
-              ),
-              const SizedBox(height: 12),
-              // KB Transferred range
-              Text('Transferred (kB, optional)', style: TextStyle(fontSize: 12, color: Theme.of(ctx).extension<AppColors>()!.textSecondary)),
-              const SizedBox(height: 6),
-              Row(children: [
-                Expanded(child: TextField(
-                  controller: kb1Ctrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'From kB', border: OutlineInputBorder(), hintText: '0'),
-                )),
-                const SizedBox(width: 8),
-                const Text('-'),
-                const SizedBox(width: 8),
-                Expanded(child: TextField(
-                  controller: kb2Ctrl,
-                  keyboardType: TextInputType.number,
-                  decoration: const InputDecoration(
-                    labelText: 'To kB', border: OutlineInputBorder(), hintText: '0'),
-                )),
-              ]),
-            ]),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Cancel')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: accent),
-              onPressed: () {
-                Navigator.pop(dCtx);
-                // Encode proto back to numeric for FreshTomato
-                final protoNum = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'}[proto] ?? '0';
-                final p1 = port1Ctrl.text.trim();
-                final p2 = port2Ctrl.text.isEmpty ? p1 : port2Ctrl.text.trim();
-                final newRule = <String, String>{
-                  'prio': prio, 'src': srcCtrl.text.trim(), 'dst': dstCtrl.text.trim(),
-                  'proto': protoNum,
-                  'srcport': p1, 'dstport': p2,
-                  'port1': p1, 'port2': p2,
-                  'kb1': kb1Ctrl.text.trim(), 'kb2': kb2Ctrl.text.trim(),
-                  'desc': descCtrl.text.trim(),
-                  'rawDesc': descCtrl.text.trim(),
-                };
-                final updated = List<Map<String, String>>.from(allRules);
-                if (isEdit && index != null) {
-                  updated[index] = newRule;
-                } else {
-                  updated.add(newRule);
-                }
-                _saveRules(updated);
-              },
-              child: Text(isEdit ? 'Save' : 'Add', style: const TextStyle(color: Colors.white)),
-            ),
-          ],
-        ),
+        builder: (dCtx, setS) {
+          final tc = Theme.of(ctx).extension<AppColors>()!;
+          Widget section(String t) => Padding(
+            padding: const EdgeInsets.only(top: 14, bottom: 6),
+            child: Text(t, style: TextStyle(fontSize: 11,
+                fontWeight: FontWeight.w600, color: tc.textSecondary)));
+
+          return AlertDialog(
+            backgroundColor: Theme.of(ctx).colorScheme.surface,
+            title: Text(isEdit ? 'Edit Rule' : 'Add Rule'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+                  // Class 
+                  section('Class'),
+                  DropdownButtonFormField<String>(
+                    value: prio, isExpanded: true,
+                    decoration: _dec('Priority / Class'),
+                    items: List.generate(classNames.length, (i) =>
+                      DropdownMenuItem(value: '${i+1}',
+                        child: Text('Priority ${i+1} - ${classNames[i]}',
+                          style: const TextStyle(fontSize: 13)))),
+                    onChanged: (v) => setS(() => prio = v ?? '1'),
+                  ),
+
+                  // Description 
+                  section('Description'),
+                  TextField(controller: descCtrl,
+                    decoration: _dec('Description', hint: 'e.g. DNS, Gaming')),
+
+                  // Address 
+                  section('Address'),
+                  Row(children: [
+                    Expanded(child: DropdownButtonFormField<String>(
+                      value: addrType, isExpanded: true,
+                      decoration: _dec('Address Type'),
+                      items: const [
+                        DropdownMenuItem(value: 'any', child: Text('Any Address')),
+                        DropdownMenuItem(value: 'dst', child: Text('Dst IP')),
+                        DropdownMenuItem(value: 'src', child: Text('Src IP')),
+                        DropdownMenuItem(value: 'mac', child: Text('Src MAC')),
+                      ],
+                      onChanged: (v) => setS(() { addrType = v ?? 'any'; addrCtrl.clear(); }),
+                    )),
+                    if (addrType != 'any') ...[
+                      const SizedBox(width: 8),
+                      Expanded(child: TextField(controller: addrCtrl,
+                        decoration: _dec(
+                          addrType == 'mac' ? 'MAC Address' : 'IP / CIDR',
+                          hint: addrType == 'mac' ? 'AA:BB:CC:DD:EE:FF' : '192.168.1.0/24'))),
+                    ],
+                  ]),
+
+                  // Protocol 
+                  section('Protocol'),
+                  DropdownButtonFormField<String>(
+                    value: proto,
+                    decoration: _dec('Protocol'),
+                    items: const [
+                      DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP')),
+                      DropdownMenuItem(value: 'TCP',     child: Text('TCP')),
+                      DropdownMenuItem(value: 'UDP',     child: Text('UDP')),
+                      DropdownMenuItem(value: 'Any',     child: Text('Any Protocol')),
+                      DropdownMenuItem(value: 'ICMP',    child: Text('ICMP')),
+                    ],
+                    onChanged: (v) => setS(() => proto = v ?? 'TCP/UDP'),
+                  ),
+
+                  // Port 
+                  section('Port'),
+                  Row(children: [
+                    Expanded(child: DropdownButtonFormField<String>(
+                      value: portType, isExpanded: true,
+                      decoration: _dec('Port Type'),
+                      items: const [
+                        DropdownMenuItem(value: 'any',      child: Text('Any Port')),
+                        DropdownMenuItem(value: 'dst',      child: Text('Dst Port')),
+                        DropdownMenuItem(value: 'src',      child: Text('Src Port')),
+                        DropdownMenuItem(value: 'srcordst', child: Text('Src or Dst')),
+                      ],
+                      onChanged: (v) => setS(() { portType = v ?? 'dst'; port1Ctrl.clear(); port2Ctrl.clear(); }),
+                    )),
+                    if (portType != 'any') ...[
+                      const SizedBox(width: 8),
+                      Expanded(child: TextField(controller: port1Ctrl,
+                        keyboardType: TextInputType.number,
+                        decoration: _dec('From', hint: '53'))),
+                      const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text('-')),
+                      Expanded(child: TextField(controller: port2Ctrl,
+                        keyboardType: TextInputType.number,
+                        decoration: _dec('To', hint: '53'))),
+                    ],
+                  ]),
+
+                  // IPP2P 
+                  section('IPP2P (P2P Detection)'),
+                  DropdownButtonFormField<String>(
+                    value: ipp2p, isExpanded: true,
+                    decoration: _dec('IPP2P Filter'),
+                    items: ipp2pOptions.map((o) =>
+                      DropdownMenuItem(value: o, child: Text(o == 'disabled' ? 'IPP2P (disabled)' : o))).toList(),
+                    onChanged: (v) => setS(() => ipp2p = v ?? 'disabled'),
+                  ),
+
+                  // Layer 7 
+                  section('Layer 7 (DPI)'),
+                  DropdownButtonFormField<String>(
+                    value: layer7, isExpanded: true,
+                    decoration: _dec('Layer 7 Pattern'),
+                    items: layer7Options.map((o) =>
+                      DropdownMenuItem(value: o, child: Text(o == 'disabled' ? 'Layer 7 (disabled)' : o))).toList(),
+                    onChanged: (v) => setS(() => layer7 = v ?? 'disabled'),
+                  ),
+
+                  // DSCP 
+                  section('DSCP'),
+                  DropdownButtonFormField<String>(
+                    value: dscp, isExpanded: true,
+                    decoration: _dec('DSCP Class'),
+                    items: dscpOptions.map((o) =>
+                      DropdownMenuItem(value: o, child: Text(o == 'any' ? 'DSCP (any)' : 'DSCP Class $o'))).toList(),
+                    onChanged: (v) => setS(() => dscp = v ?? 'any'),
+                  ),
+
+                  // KB Transferred 
+                  section('KB Transferred (optional)'),
+                  Row(children: [
+                    Expanded(child: TextField(controller: kb1Ctrl,
+                      keyboardType: TextInputType.number,
+                      decoration: _dec('From kB', hint: '0'))),
+                    const Padding(padding: EdgeInsets.symmetric(horizontal: 4), child: Text('-')),
+                    Expanded(child: TextField(controller: kb2Ctrl,
+                      keyboardType: TextInputType.number,
+                      decoration: _dec('To kB', hint: '-1=no limit'))),
+                  ]),
+
+                ])));
+        },
       ),
+    ).then((_) {
+      // Apply after dialog closes
+    });
+
+    // Use a simpler approach - show dialog and get result
+    showDialog(
+      context: ctx,
+      barrierDismissible: false,
+      builder: (dCtx2) => StatefulBuilder(
+        builder: (dCtx2, setS2) {
+          InputDecoration dec2(String label, {String? hint}) => InputDecoration(
+            labelText: label, border: const OutlineInputBorder(),
+            hintText: hint, isDense: true);
+          final tc2 = Theme.of(ctx).extension<AppColors>()!;
+          Widget sec2(String t) => Padding(
+            padding: const EdgeInsets.only(top: 14, bottom: 6),
+            child: Text(t, style: TextStyle(fontSize: 11,
+                fontWeight: FontWeight.w600, color: tc2.textSecondary)));
+
+          return AlertDialog(
+            backgroundColor: Theme.of(ctx).colorScheme.surface,
+            title: Text(isEdit ? 'Edit Rule' : 'Add Rule'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: SingleChildScrollView(
+                child: Column(mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
+
+                  sec2('Class'),
+                  DropdownButtonFormField<String>(
+                    value: prio, isExpanded: true,
+                    decoration: dec2('Priority / Class'),
+                    items: List.generate(classNames.length, (i) =>
+                      DropdownMenuItem(value: '${i+1}',
+                        child: Text('P${i+1} - ${classNames[i]}', style: const TextStyle(fontSize: 13)))),
+                    onChanged: (v) => setS2(() => prio = v ?? '1'),
+                  ),
+                  sec2('Description'),
+                  TextField(controller: descCtrl,
+                    decoration: dec2('Description', hint: 'e.g. DNS, Gaming')),
+
+                  sec2('Address'),
+                  DropdownButtonFormField<String>(
+                    value: addrType, isExpanded: true,
+                    decoration: dec2('Address Type'),
+                    items: const [
+                      DropdownMenuItem(value: 'any', child: Text('Any Address')),
+                      DropdownMenuItem(value: 'dst', child: Text('Dst IP')),
+                      DropdownMenuItem(value: 'src', child: Text('Src IP')),
+                      DropdownMenuItem(value: 'mac', child: Text('Src MAC')),
+                    ],
+                    onChanged: (v) => setS2(() { addrType = v ?? 'any'; addrCtrl.clear(); }),
+                  ),
+                  if (addrType != 'any') ...[
+                    const SizedBox(height: 8),
+                    TextField(controller: addrCtrl,
+                      decoration: dec2(
+                        addrType == 'mac' ? 'MAC Address' : 'IP / CIDR',
+                        hint: addrType == 'mac' ? 'AA:BB:CC:DD:EE:FF' : '192.168.1.0/24')),
+                  ],
+
+                  sec2('Protocol'),
+                  DropdownButtonFormField<String>(
+                    value: proto,
+                    decoration: dec2('Protocol'),
+                    items: const [
+                      DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP')),
+                      DropdownMenuItem(value: 'TCP',     child: Text('TCP')),
+                      DropdownMenuItem(value: 'UDP',     child: Text('UDP')),
+                      DropdownMenuItem(value: 'Any',     child: Text('Any Protocol')),
+                      DropdownMenuItem(value: 'ICMP',    child: Text('ICMP')),
+                    ],
+                    onChanged: (v) => setS2(() => proto = v ?? 'TCP/UDP'),
+                  ),
+
+                  sec2('Port'),
+                  DropdownButtonFormField<String>(
+                    value: portType, isExpanded: true,
+                    decoration: dec2('Port Type'),
+                    items: const [
+                      DropdownMenuItem(value: 'any',      child: Text('Any Port')),
+                      DropdownMenuItem(value: 'dst',      child: Text('Dst Port')),
+                      DropdownMenuItem(value: 'src',      child: Text('Src Port')),
+                      DropdownMenuItem(value: 'srcordst', child: Text('Src or Dst Port')),
+                    ],
+                    onChanged: (v) => setS2(() { portType = v ?? 'dst'; port1Ctrl.clear(); port2Ctrl.clear(); }),
+                  ),
+                  if (portType != 'any') ...[
+                    const SizedBox(height: 8),
+                    Row(children: [
+                      Expanded(child: TextField(controller: port1Ctrl,
+                        keyboardType: TextInputType.number,
+                        decoration: dec2('Port From', hint: '53'))),
+                      const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Text('-')),
+                      Expanded(child: TextField(controller: port2Ctrl,
+                        keyboardType: TextInputType.number,
+                        decoration: dec2('Port To', hint: '53'))),
+                    ]),
+                  ],
+
+                  sec2('IPP2P'),
+                  DropdownButtonFormField<String>(
+                    value: ipp2p, isExpanded: true,
+                    decoration: dec2('IPP2P Filter'),
+                    items: ipp2pOptions.map((o) => DropdownMenuItem(
+                      value: o, child: Text(o == 'disabled' ? 'IPP2P (disabled)' : o,
+                        style: const TextStyle(fontSize: 13)))).toList(),
+                    onChanged: (v) => setS2(() => ipp2p = v ?? 'disabled'),
+                  ),
+
+                  sec2('Layer 7'),
+                  DropdownButtonFormField<String>(
+                    value: layer7, isExpanded: true,
+                    decoration: dec2('Layer 7 Pattern'),
+                    items: layer7Options.map((o) => DropdownMenuItem(
+                      value: o, child: Text(o == 'disabled' ? 'Layer 7 (disabled)' : o,
+                        style: const TextStyle(fontSize: 13)))).toList(),
+                    onChanged: (v) => setS2(() => layer7 = v ?? 'disabled'),
+                  ),
+
+                  sec2('DSCP'),
+                  DropdownButtonFormField<String>(
+                    value: dscp, isExpanded: true,
+                    decoration: dec2('DSCP'),
+                    items: dscpOptions.map((o) => DropdownMenuItem(
+                      value: o, child: Text(o == 'any' ? 'DSCP (any)' : 'DSCP Class $o',
+                        style: const TextStyle(fontSize: 13)))).toList(),
+                    onChanged: (v) => setS2(() => dscp = v ?? 'any'),
+                  ),
+
+                  sec2('KB Transferred (optional)'),
+                  Row(children: [
+                    Expanded(child: TextField(controller: kb1Ctrl,
+                      keyboardType: TextInputType.number,
+                      decoration: dec2('From kB', hint: '0'))),
+                    const Padding(padding: EdgeInsets.symmetric(horizontal: 6), child: Text('-')),
+                    Expanded(child: TextField(controller: kb2Ctrl,
+                      keyboardType: TextInputType.number,
+                      decoration: dec2('To kB', hint: 'empty=no limit'))),
+                  ]),
+                ]))),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(dCtx2), child: const Text('Cancel')),
+              ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: accent),
+                onPressed: () {
+                  Navigator.pop(dCtx2);
+                  final p2n = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'};
+                  final protoNum = p2n[proto] ?? '0';
+                  final prioIdx  = ((int.tryParse(prio) ?? 1) - 1).toString(); // back to 0-indexed
+                  final p1 = portType != 'any' ? port1Ctrl.text.trim() : '';
+                  final p2 = portType != 'any' ? (port2Ctrl.text.trim().isEmpty ? p1 : port2Ctrl.text.trim()) : '';
+                  final srcAddr  = addrType == 'src' || addrType == 'mac' ? addrCtrl.text.trim() : '';
+                  final dstAddr  = addrType == 'dst' ? addrCtrl.text.trim() : '';
+                  final kbFrom   = kb1Ctrl.text.trim().isEmpty ? '0'  : kb1Ctrl.text.trim();
+                  final kbTo     = kb2Ctrl.text.trim().isEmpty ? '-1' : kb2Ctrl.text.trim();
+                  final newRule = <String, String>{
+                    'prio':    prioIdx,
+                    'proto':   protoNum,
+                    'src':     srcAddr,
+                    'dst':     dstAddr,
+                    'port1':   p1,
+                    'port2':   p2,
+                    'sport':   portType == 'src' || portType == 'srcordst' ? p1 : '',
+                    'kb1':     kbFrom,
+                    'kb2':     kbTo,
+                    'rawDesc': descCtrl.text.trim(),
+                    'desc':    descCtrl.text.trim(),
+                    '_modified': '1',
+                  };
+                  final updated = List<Map<String, String>>.from(allRules);
+                  if (isEdit && index != null) updated[index] = newRule;
+                  else updated.add(newRule);
+                  _saveRules(updated);
+                },
+                child: Text(isEdit ? 'Save' : 'Add', style: const TextStyle(color: Colors.white)),
+              ),
+            ],
+          );
+        }),
     );
   }
 
