@@ -142,23 +142,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
 
       final session = await ssh.client!.execute('cat "${entry.path}"');
 
-      // Collect all bytes
-      final chunks = <Uint8List>[];
-      int totalBytes = 0;
-      final fileSize = entry.size > 0 ? entry.size : 0;
-
-      await for (final chunk in session.stdout) {
-        chunks.add(Uint8List.fromList(chunk));
-        totalBytes += chunk.length;
-        if (fileSize > 0) {
-          setState(() => transfer.progress = (totalBytes / fileSize).clamp(0.0, 0.99));
-        }
-      }
-      await session.done;
-
-      if (totalBytes == 0) throw Exception('File is empty or cannot be read');
-
-      // Write to local file
+      // Stream langsung ke file - tidak buffer di RAM (support file besar)
       Directory saveDir;
       if (Platform.isAndroid) {
         saveDir = Directory('/storage/emulated/0/Download/TomatoManager');
@@ -171,10 +155,23 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final localPath = '${saveDir.path}/${entry.name}';
       final outFile = File(localPath);
       final raf = await outFile.open(mode: FileMode.write);
-      for (final chunk in chunks) {
-        await raf.writeFrom(chunk);
+      int totalBytes = 0;
+      final fileSize = entry.size > 0 ? entry.size : 0;
+
+      await for (final chunk in session.stdout) {
+        await raf.writeFrom(Uint8List.fromList(chunk));
+        totalBytes += chunk.length;
+        if (fileSize > 0) {
+          setState(() => transfer.progress = (totalBytes / fileSize).clamp(0.0, 0.99));
+        }
       }
       await raf.close();
+      await session.done;
+
+      if (totalBytes == 0) {
+        await outFile.delete();
+        throw Exception('File is empty or cannot be read');
+      }
 
       setState(() { transfer.done = true; transfer.progress = 1.0; });
       if (mounted) {
@@ -218,25 +215,20 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final ssh = ref.read(sshServiceProvider);
       if (ssh.client == null) throw Exception('Not connected');
 
-      final bytes = await localFile.readAsBytes();
       final escapedPath = remotePath.replaceAll("'", "'\''");
 
-      // Stream raw bytes directly into SSH stdin - works on all BusyBox routers
-      // Uses 'dd' to write stdin to file, no base64 needed, no ARG_MAX limit
+      // Stream dari file langsung ke SSH stdin - tidak load ke RAM
       final session = await ssh.client!.execute(
-        "dd of='$escapedPath' bs=4096"
+        "dd of='$escapedPath' bs=65536"
       );
 
-      // Write bytes to stdin in 4KB chunks, updating progress
-      const chunkSize = 4096;
+      // Baca file sebagai stream 64KB per chunk
       int sent = 0;
-      while (sent < bytes.length) {
-        final end = (sent + chunkSize).clamp(0, bytes.length);
-        session.stdin.add(bytes.sublist(sent, end));
-        sent = end;
+      await for (final chunk in localFile.openRead()) {
+        session.stdin.add(chunk);
+        sent += chunk.length;
         setState(() => transfer.progress =
-          (sent / bytes.length).clamp(0.0, 0.99));
-        // Small yield to let UI update
+          (sent / fileSize).clamp(0.0, 0.99));
         await Future.delayed(Duration.zero);
       }
       await session.stdin.close();

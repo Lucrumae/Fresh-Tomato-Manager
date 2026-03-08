@@ -192,6 +192,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
   }
 
+  Future<String?> _getLocalIp() async {
+    try {
+      final ifaces = await NetworkInterface.list(
+        type: InternetAddressType.IPv4,
+        includeLinkLocal: false,
+      );
+      // Prefer wlan interface (connected to router via WiFi)
+      for (final iface in ifaces) {
+        final name = iface.name.toLowerCase();
+        if (name.contains('wlan') || name.contains('wifi') || name.contains('en')) {
+          for (final addr in iface.addresses) {
+            if (!addr.isLoopback) return addr.address;
+          }
+        }
+      }
+      // Fallback: first non-loopback IPv4
+      for (final iface in ifaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback) return addr.address;
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   // -- Firmware Upgrade --
   Future<void> _upgradeFirmware() async {
     final ssh = ref.read(sshServiceProvider);
@@ -245,28 +270,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _showProgress('Step 2/4: Resetting NVRAM...');
       await ssh.run('nvram erase 2>/dev/null || mtd-erase2 nvram 2>/dev/null || true');
 
-      // Step 3: Upload firmware via base64 chunks
-      _showProgress('Step 3/4: Uploading firmware ($fwName)...');
+      // Step 3: Upload via HTTP server (router wget dari HP)
+      _showProgress('Step 3/4: Starting HTTP server...');
       final fileBytes = await File(fwPath).readAsBytes();
-      final b64 = base64Encode(fileBytes);
-      await ssh.run('rm -f /tmp/upgrade.b64 /tmp/upgrade.trx /tmp/upgrade.bin');
-      const chunkSize = 3000;
-      var uploaded = 0;
-      for (var i = 0; i < b64.length; i += chunkSize) {
-        final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
-        final chunk = b64.substring(i, end);
-        final op = i == 0 ? '>' : '>>';
-        await ssh.run("printf '%s' '$chunk' $op /tmp/upgrade.b64");
-        uploaded += (end - i);
-        final pct = (uploaded / b64.length * 100).toStringAsFixed(0);
-        _showProgress('Step 3/4: Uploading... $pct%');
+      final totalBytes = fileBytes.length;
+
+      // HP buka HTTP server, router wget download langsung
+      final httpServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      final port = httpServer.port;
+      final localIp = await _getLocalIp();
+      if (localIp == null) {
+        await httpServer.close(force: true);
+        throw Exception('Cannot determine local IP address');
       }
-      await ssh.run('base64 -d /tmp/upgrade.b64 > $fwTmp');
-      // Verify size
+
+      // Serve file sekali lalu tutup
+      var served = false;
+      httpServer.listen((req) async {
+        if (served) { req.response.statusCode = 410; req.response.close(); return; }
+        served = true;
+        req.response.headers.contentType =
+          ContentType('application', 'octet-stream');
+        req.response.contentLength = totalBytes;
+        req.response.add(fileBytes);
+        await req.response.flush();
+        await req.response.close();
+      });
+
+      final mb = (totalBytes / 1024 / 1024).toStringAsFixed(1);
+      _showProgress('Step 3/4: Router downloading $mb MB...');
+
+      // Router download dari HP
+      await ssh.run('rm -f $fwTmp');
+      final dlResult = await ssh.run(
+        'wget -q --timeout=120 -O $fwTmp http://$localIp:$port/fw 2>&1 || '
+        'curl -s --max-time 120 -o $fwTmp http://$localIp:$port/fw 2>&1'
+      );
+      await httpServer.close(force: true);
+
+      // Verify ukuran file
       final uploadedSize = int.tryParse(
-        (await ssh.run('wc -c < $fwTmp')).trim()) ?? 0;
-      if (uploadedSize < 1024 * 1024) {
-        throw Exception('Upload failed: only $uploadedSize bytes received');
+        (await ssh.run('wc -c < $fwTmp 2>/dev/null || echo 0')).trim()) ?? 0;
+      if (uploadedSize < totalBytes - 1024) {
+        throw Exception(
+          'Upload gagal: $uploadedSize / $totalBytes bytes. $dlResult');
       }
 
       // Step 4: Flash firmware then erase nvram and reboot
