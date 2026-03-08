@@ -212,6 +212,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final fwPath = result.files.single.path!;
     final fwName = result.files.single.name;
     final fwSize = result.files.single.size;
+    final fwExt = fwName.toLowerCase().endsWith('.bin') ? 'bin' : 'trx';
+    final fwTmp = '/tmp/upgrade.$fwExt';
 
     // Warn and confirm
     final sizeMB = (fwSize / 1024 / 1024).toStringAsFixed(1);
@@ -247,33 +249,30 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       _showProgress('Step 3/4: Uploading firmware ($fwName)...');
       final fileBytes = await File(fwPath).readAsBytes();
       final b64 = base64Encode(fileBytes);
-      await ssh.run('rm -f /tmp/firmware_upload.b64 /tmp/firmware_upload.bin');
+      await ssh.run('rm -f /tmp/upgrade.b64 /tmp/upgrade.trx /tmp/upgrade.bin');
       const chunkSize = 3000;
       var uploaded = 0;
       for (var i = 0; i < b64.length; i += chunkSize) {
         final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
         final chunk = b64.substring(i, end);
         final op = i == 0 ? '>' : '>>';
-        await ssh.run("printf '%s' '$chunk' $op /tmp/firmware_upload.b64");
+        await ssh.run("printf '%s' '$chunk' $op /tmp/upgrade.b64");
         uploaded += (end - i);
         final pct = (uploaded / b64.length * 100).toStringAsFixed(0);
         _showProgress('Step 3/4: Uploading... $pct%');
       }
-      await ssh.run('base64 -d /tmp/firmware_upload.b64 > /tmp/firmware_upload.bin');
+      await ssh.run('base64 -d /tmp/upgrade.b64 > $fwTmp');
       // Verify size
       final uploadedSize = int.tryParse(
-        (await ssh.run('wc -c < /tmp/firmware_upload.bin')).trim()) ?? 0;
+        (await ssh.run('wc -c < $fwTmp')).trim()) ?? 0;
       if (uploadedSize < 1024 * 1024) {
         throw Exception('Upload failed: only $uploadedSize bytes received');
       }
 
-      // Step 4: Flash firmware (mtd2 = linux partition, confirmed via /proc/mtd)
+      // Step 4: Flash firmware then erase nvram and reboot
       _showProgress('Step 4/4: Flashing... DO NOT DISCONNECT!');
-      // Try each flash tool in order, then reboot regardless of which succeeded
       ssh.run(
-        '(mtd-write2 /tmp/firmware_upload.bin linux || '
-        'mtd write /tmp/firmware_upload.bin linux || '
-        'write /tmp/firmware_upload.bin linux) && reboot'
+        'mtd write $fwTmp linux && nvram erase && reboot'
       ).catchError((_) {});
 
       if (mounted) {
