@@ -789,7 +789,9 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     try {
       final obwVal = obw.isNotEmpty ? obw : '0';
       final ibwVal = ibw.isNotEmpty ? ibw : '0';
-      final cmds = [
+      // Send each command individually for reliability
+      final results = <String>[];
+      for (final cmd in [
         'nvram set qos_enable=${enabled ? 1 : 0}',
         'nvram set qos_type=$type',
         if (defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
@@ -797,18 +799,17 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         'nvram set qos_obw=$obwVal',
         'nvram set qos_ibw=$ibwVal',
         'nvram commit',
-      ].join(' && ');
-      await ssh.run(cmds);
-      // Restart QoS with timeout so it doesn't hang indefinitely
-      // Uses 'timeout 15' to kill if it takes too long, runs in subshell
+      ]) {
+        await ssh.run(cmd);
+        results.add(cmd.split(' ').take(3).join(' '));
+      }
+      // Read back to verify
+      final vType = (await ssh.run('nvram get qos_type')).trim();
+      final vObw  = (await ssh.run('nvram get qos_obw')).trim();
       ssh.run('(service qos stop > /dev/null 2>&1; service qos start > /dev/null 2>&1 &)').catchError((_) {});
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
-      // Delay refresh slightly to let restart begin
-      await Future.delayed(const Duration(seconds: 2));
-      ref.invalidate(qosBasicProvider);
-      ref.read(_basicTickProvider.notifier).state++;
-      setState(() { _saveMsg = 'Saved! Applying...'; });
+      setState(() { _saveMsg = 'Saved! type=$vType obw=$vObw'; });
     } catch (e) {
       setState(() { _saveMsg = 'Error: $e'; });
     } finally {
