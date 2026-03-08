@@ -267,13 +267,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         throw Exception('Upload failed: only $uploadedSize bytes received');
       }
 
-      // Step 4: Flash firmware
+      // Step 4: Flash firmware (mtd2 = linux partition, confirmed via /proc/mtd)
       _showProgress('Step 4/4: Flashing... DO NOT DISCONNECT!');
-      // FreshTomato uses mtd-write or write to flash
+      // Try each flash tool in order, then reboot regardless of which succeeded
       ssh.run(
-        'mtd-write2 /tmp/firmware_upload.bin linux 2>/dev/null || '
-        'mtd write /tmp/firmware_upload.bin linux 2>/dev/null || '
-        'write /tmp/firmware_upload.bin linux 2>/dev/null && reboot'
+        '(mtd-write2 /tmp/firmware_upload.bin linux || '
+        'mtd write /tmp/firmware_upload.bin linux || '
+        'write /tmp/firmware_upload.bin linux) && reboot'
       ).catchError((_) {});
 
       if (mounted) {
