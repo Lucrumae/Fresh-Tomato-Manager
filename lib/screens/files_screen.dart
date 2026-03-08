@@ -140,9 +140,6 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       // Use SSH execute + cat - more reliable on embedded routers than SFTP
       setState(() => transfer.progress = -1); // indeterminate while reading
 
-      final session = await ssh.client!.execute('cat "${entry.path}"');
-
-      // Stream langsung ke file - tidak buffer di RAM (support file besar)
       Directory saveDir;
       if (Platform.isAndroid) {
         saveDir = Directory('/storage/emulated/0/Download/TomatoManager');
@@ -158,15 +155,27 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       int totalBytes = 0;
       final fileSize = entry.size > 0 ? entry.size : 0;
 
+      // Jalankan cat via execute dan stream ke file
+      final session = await ssh.client!.execute('cat "\${entry.path}"');
+
+      // Drain stderr supaya tidak block stdout
+      session.stderr.drain<List<int>>().catchError((_) {});
+
       await for (final chunk in session.stdout) {
         await raf.writeFrom(Uint8List.fromList(chunk));
         totalBytes += chunk.length;
         if (fileSize > 0) {
-          setState(() => transfer.progress = (totalBytes / fileSize).clamp(0.0, 0.99));
+          setState(() => transfer.progress =
+            (totalBytes / fileSize).clamp(0.0, 0.99));
+        } else {
+          // Ukuran tidak diketahui - tampil indeterminate tapi update bytes
+          setState(() => transfer.progress = -1);
         }
       }
       await raf.close();
-      await session.done;
+      // Drain session - jangan tunggu terlalu lama
+      await session.done.timeout(
+        const Duration(seconds: 5), onTimeout: () {});
 
       if (totalBytes == 0) {
         await outFile.delete();

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -35,37 +36,61 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
     setState(() => _backupBusy = true);
     try {
-      // FreshTomato backup: write nvram values to file then read line by line
-      // nvram show can be large - write to file first to avoid SSH buffer limits
-      await ssh.run('nvram show > /tmp/nvram_backup.txt 2>/dev/null');
-      final sizeStr = (await ssh.run('wc -c < /tmp/nvram_backup.txt 2>/dev/null || echo 0')).trim();
-      final size = int.tryParse(sizeStr.trim().split(RegExp(r'\s+')).first) ?? 0;
+      // Tulis nvram ke file di router dulu
+      await ssh.run('nvram show > /tmp/nvram_backup.cfg 2>/dev/null');
+      final sizeStr = (await ssh.run(
+        'wc -c < /tmp/nvram_backup.cfg 2>/dev/null || echo 0')).trim();
+      final size = int.tryParse(sizeStr.split(RegExp(r'\s+')).first) ?? 0;
       if (size < 10) throw Exception('nvram show returned empty output');
 
-      // Read in chunks to avoid SSH output buffer limits
-      final lineCount = int.tryParse(
-        (await ssh.run('wc -l < /tmp/nvram_backup.txt')).trim()) ?? 0;
-      final sb = StringBuffer();
-      const chunk = 100; // lines per read
-      for (var i = 1; i <= lineCount + chunk; i += chunk) {
-        final part = await ssh.run('sed -n "${i},${ i + chunk - 1}p" /tmp/nvram_backup.txt');
-        if (part.trim().isEmpty) break;
-        sb.write(part);
-        if (!part.endsWith('\n')) sb.write('\n');
+      // HP buka HTTP server, router curl/wget upload file ke HP
+      final httpServer = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+      final port = httpServer.port;
+      final localIp = await _getLocalIp();
+      if (localIp == null) {
+        await httpServer.close(force: true);
+        throw Exception('Cannot determine local IP address');
       }
 
-      final content = sb.toString();
-      if (content.trim().isEmpty) throw Exception('Could not read backup data');
+      // Terima file dari router
+      final completer = Completer<List<int>>();
+      httpServer.listen((req) async {
+        final bytes = <int>[];
+        await for (final chunk in req) { bytes.addAll(chunk); }
+        req.response.statusCode = 200;
+        await req.response.close();
+        await httpServer.close(force: true);
+        completer.complete(bytes);
+      });
 
+      // Router POST file backup ke HP via curl/wget
+      await ssh.run(
+        'curl -s -X POST --data-binary @/tmp/nvram_backup.cfg '
+        'http://$localIp:$port/backup 2>/dev/null || '
+        'wget -q -O /dev/null --post-file=/tmp/nvram_backup.cfg '
+        'http://$localIp:$port/backup 2>/dev/null'
+      );
+
+      final bytes = await completer.future.timeout(
+        const Duration(seconds: 30),
+        onTimeout: () {
+          httpServer.close(force: true);
+          throw Exception('Backup transfer timeout');
+        },
+      );
+
+      if (bytes.isEmpty) throw Exception('Received empty backup data');
+
+      // Simpan ke Downloads/TomatoManager/Backup/
       final savePath = await _resolveDownloadPath('Backup');
       final ts = DateTime.now().toIso8601String()
           .replaceAll(':', '-').substring(0, 19);
       final file = File('$savePath/tomato_$ts.cfg');
-      await file.writeAsString(content);
+      await file.writeAsBytes(bytes);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Saved: tomato_$ts.cfg  ($size bytes)'),
+          content: Text('Saved: tomato_$ts.cfg  (${bytes.length} bytes)'),
           backgroundColor: AppTheme.success,
           duration: const Duration(seconds: 5),
         ));
@@ -82,7 +107,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       if (mounted) setState(() => _backupBusy = false);
     }
   }
-
   //  Restore 
   Future<void> _restore() async {
     final ssh = ref.read(sshServiceProvider);
