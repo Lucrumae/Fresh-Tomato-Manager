@@ -47,117 +47,77 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return [];
   try {
-    // Read each nvram key separately - most reliable approach
-    final rulesRaw  = (await ssh.run('nvram get qos_orules 2>/dev/null || echo')).trim();
-    final classRaw  = (await ssh.run('nvram get qos_classnames 2>/dev/null || echo')).trim();
+    final rulesRaw = (await ssh.run('nvram get qos_orules 2>/dev/null || echo')).trim();
+    final classRaw = (await ssh.run('nvram get qos_classnames 2>/dev/null || echo')).trim();
     final rules = <Map<String, String>>[];
-    
-    final rulesStr = rulesRaw;
-    // classnames: space-separated list e.g. "Service VOIP/Game Remote WWW Media ..."
+
+    // classnames: space-separated
     final classNames = classRaw.isEmpty ? <String>[] : classRaw.split(RegExp(r'\s+'));
-    
-    // FreshTomato qos_orules ACTUAL format (from FreshTomato source qos.c):
-    // Each rule fields (0-indexed):
-    //   [0] addr1 (src ip/mask or empty)
-    //   [1] addr2 (dst ip/mask or empty)
-    //   [2] proto  (0=any, 6=tcp, 17=udp, 256=tcp+udp)
-    //   [3] port1  (dst port start, or "any")
-    //   [4] port2  (dst port end)
-    //   [5] kbytes1 (transferred from, kB)
-    //   [6] kbytes2 (transferred to, kB)
-    //   [7] prio   (1-8 class priority)
-    //   [8] ipp2p  (p2p detection flag)
-    //   [9] layer7 (l7 pattern)
-    //   [10] desc  (human-readable description)
-    //   [11] enable (1/0)
-    // Rules separated by ">"
-    final protoMap = {'0':'Any','6':'TCP','17':'UDP','256':'TCP/UDP','1':'ICMP'};
-    // Also FreshTomato class priority names (default)
-    const defaultClassNames = ['Service','VOIP/Game','Remote','WWW','Media','HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
-    
+    const defClassNames = ['Service','VOIP/Game','Remote','WWW','Media',
+        'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
+    const protoMap = {'0':'Any','6':'TCP','17':'UDP','256':'TCP/UDP','1':'ICMP'};
+
+    // REAL FreshTomato qos_orules format (verified from actual router):
+    // prio<src<proto<dst<dport<sport<empty<kb1:kb2<layer7<ipp2p<desc
+    // [0]  prio  - 0-indexed class (0=Service,1=VOIP/Game,...)
+    // [1]  src   - source address (empty=any)
+    // [2]  proto - 0=any,6=tcp,17=udp,256=tcp+udp
+    // [3]  dst   - destination address ("d"=any or IP)
+    // [4]  dport - destination port (empty=any)
+    // [5]  sport - source port (empty=any)
+    // [6]  empty field
+    // [7]  kb    - kb transferred range "start:end" (-1=no limit)
+    // [8]  layer7 pattern (empty=any)
+    // [9]  ipp2p flag
+    // [10] desc  - description
+    // Rules separated by ">" (NO trailing >)
+
     int ruleIdx = 0;
-    for (final chunk in rulesStr.split('>')) {
+    for (final chunk in rulesRaw.split('>')) {
       final trimmed = chunk.trim();
       if (trimmed.isEmpty) continue;
       ruleIdx++;
-      final parts = trimmed.split('<');
-      if (parts.length < 3) continue;
+      final f = trimmed.split('<');
+      if (f.length < 3) continue;
 
-      // Try the FreshTomato 11-field format first
-      String src='', dst='', proto='Any', port1='', port2='', kb1='', kb2='', prio='5', desc='';
-      
-      if (parts.length >= 8) {
-        // Standard FreshTomato format
-        src   = parts[0].trim();
-        dst   = parts[1].trim();
-        final protoRaw = parts[2].trim();
-        proto = protoMap[protoRaw] ?? (protoRaw.isEmpty ? 'Any' : protoRaw);
-        port1 = parts.length > 3 ? parts[3].trim() : '';
-        port2 = parts.length > 4 ? parts[4].trim() : '';
-        kb1   = parts.length > 5 ? parts[5].trim() : '';
-        kb2   = parts.length > 6 ? parts[6].trim() : '';
-        prio  = parts.length > 7 ? parts[7].trim() : '5';
-        // ipp2p = parts[8], layer7 = parts[9]
-        desc  = parts.length > 10 ? parts[10].trim() : '';
-      } else {
-        // Fallback: shorter format - try to detect prio vs proto in field[0]
-        final f0 = parts[0].trim();
-        final f0num = int.tryParse(f0);
-        if (f0num != null && f0num <= 10) {
-          // prio<src<dst<proto<sport<dport<desc
-          prio  = f0;
-          src   = parts.length > 1 ? parts[1].trim() : '';
-          dst   = parts.length > 2 ? parts[2].trim() : '';
-          final pr = parts.length > 3 ? parts[3].trim() : '0';
-          proto = protoMap[pr] ?? (pr.isEmpty ? 'Any' : pr);
-          port1 = parts.length > 4 ? parts[4].trim() : '';
-          port2 = parts.length > 5 ? parts[5].trim() : '';
-          for (int i = 6; i < parts.length; i++) {
-            final p = parts[i].trim();
-            if (p.isNotEmpty && int.tryParse(p) == null) { desc = p; break; }
-          }
-        } else {
-          proto = protoMap[f0] ?? f0;
-          desc  = parts.length > 1 ? parts[1].trim() : '';
-          port1 = parts.length > 3 ? parts[3].trim() : '';
-          final lp = parts.length > 6 ? parts[6].trim() : '';
-          prio  = int.tryParse(lp) != null ? lp : '5';
-        }
+      final prio  = f.length > 0 ? f[0].trim() : '0';
+      final src   = f.length > 1 ? f[1].trim() : '';
+      final protoRaw = f.length > 2 ? f[2].trim() : '0';
+      final proto = protoMap[protoRaw] ?? (protoRaw.isEmpty ? 'Any' : protoRaw);
+      // dst: "d" means any destination - normalize to empty
+      final dstRaw = f.length > 3 ? f[3].trim() : '';
+      final dst   = (dstRaw == 'd' || dstRaw == 'any') ? '' : dstRaw;
+      final dport = f.length > 4 ? f[4].trim() : '';
+      final sport = f.length > 5 ? f[5].trim() : '';
+      // [6] = empty field, [7] = kb range "start:end"
+      final kbRaw = f.length > 7 ? f[7].trim() : '';
+      String kb1 = '0', kb2 = '-1';
+      if (kbRaw.contains(':')) {
+        final kbParts = kbRaw.split(':');
+        kb1 = kbParts[0].trim().isEmpty ? '0'  : kbParts[0].trim();
+        kb2 = kbParts[1].trim().isEmpty ? '-1' : kbParts[1].trim();
       }
-      
-      // Resolve class name from prio
-      final prioNum = int.tryParse(prio) ?? 5;
-      final prioIdx = prioNum - 1;
-      final className = (prioIdx >= 0 && prioIdx < classNames.length)
-          ? classNames[prioIdx]
-          : (prioIdx >= 0 && prioIdx < defaultClassNames.length ? defaultClassNames[prioIdx] : '');
+      final desc  = f.length > 10 ? f[10].trim() : '';
 
-      // Ports display
-      String portDisplay = 'Any';
-      if (port1.isNotEmpty && port1 != '0') {
-        portDisplay = port2.isNotEmpty && port2 != '0' && port2 != port1
-            ? '$port1-$port2' : port1;
-      }
+      // prio is 0-indexed in storage, but we display as 1-indexed class name
+      final prioInt = int.tryParse(prio) ?? 0;
+      final className = prioInt < classNames.length   ? classNames[prioInt]
+                      : prioInt < defClassNames.length ? defClassNames[prioInt]
+                      : 'P${prioInt + 1}';
 
-      // kB transferred range
-      String xferDisplay = '';
-      if (kb1.isNotEmpty || kb2.isNotEmpty) {
-        final k1 = kb1.isEmpty || kb1 == '0' ? '0' : kb1;
-        final k2 = kb2.isEmpty || kb2 == '-1' ? '' : kb2;
-        if (k2.isNotEmpty) xferDisplay = '${k1}-${k2} kB';
-      }
-
-      // Build label
-      final label = desc.isNotEmpty ? desc
-          : (className.isNotEmpty ? className : 'Rule $ruleIdx');
+      final portDisplay = dport.isNotEmpty ? dport : 'Any';
+      final label = desc.isNotEmpty ? desc : className;
 
       rules.add({
-        'prio': prio, 'src': src, 'dst': dst,
-        'proto': proto, 'srcport': port1, 'dstport': port2,
-        'port1': port1, 'port2': port2,
+        'prio': prio,            // 0-indexed as stored in nvram
+        'src': src, 'dst': dst,
+        'proto': proto,
+        'port1': dport, 'port2': dport,
+        'sport': sport,
         'kb1': kb1, 'kb2': kb2,
-        'portDisplay': portDisplay, 'xferDisplay': xferDisplay,
+        'portDisplay': portDisplay,
         'desc': label, 'rawDesc': desc, 'className': className,
+        'rawChunk': trimmed,     // store original for safe round-trip
       });
     }
     return rules;
@@ -826,8 +786,8 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         'nvram commit',
       ].join(' && ');
       await ssh.run(cmds);
-      // Restart QoS in background - do NOT await (it hangs indefinitely)
-      ssh.run('(service qos restart > /dev/null 2>&1 &)').catchError((_) {});
+      // NOTE: Do NOT restart QoS service - on FreshTomato it REVERTS nvram values
+      // Changes take effect on next router restart or manual QoS toggle in web UI
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
       setState(() { _saveMsg = 'Saved!'; });
@@ -1089,33 +1049,33 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     try {
       // Encode each rule back to FreshTomato nvram format
       // FreshTomato: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable>...
-      // Encode rule to FreshTomato nvram format
-      // Format: src<dst<proto<port1<port2<kb1<kb2<prio<ipp2p<layer7<desc<enable
-      // IMPORTANT: proto '0'(any) can't be used with port matching in iptables
-      // If port is specified, use '256' (TCP/UDP) to avoid --port iptables error
-      const p2n = {'Any':'0','any':'0','TCP':'6','tcp':'6','UDP':'17','udp':'17','TCP/UDP':'256','ICMP':'1','icmp':'1'};
+      // REAL FreshTomato qos_orules format (verified from actual router debug):
+      // prio<src<proto<dst<dport<sport<empty<kb1:kb2<layer7<ipp2p<desc
+      // prio is 0-indexed, rules separated by > (NO trailing >)
+      const p2n = {'Any':'0','TCP':'6','UDP':'17','TCP/UDP':'256','ICMP':'1'};
       String encRule(Map<String, String> r) {
-        final rawProto = r['proto'] ?? '0';
-        String protoNum = p2n[rawProto] ?? rawProto;
-        final p1  = (r['port1']?.isNotEmpty == true && r['port1'] != '0') ? r['port1']! : '';
-        final p2  = (r['port2']?.isNotEmpty == true && r['port2'] != '0') ? r['port2']! : p1;
-        // If port set: use TCP(6) only - proto 256(TCP/UDP) causes iptables --port error
-        // on iptables 1.8.11. For UDP+port use separate rule with proto=17.
-        if (p1.isNotEmpty && (protoNum == '0' || protoNum == '256')) protoNum = '6';
-        final kb1 = r['kb1']?.isNotEmpty == true ? r['kb1']! : '0';
-        final kb2 = r['kb2']?.isNotEmpty == true ? r['kb2']! : '-1';
-        final prio = r['prio'] ?? '5';
-        final src  = r['src'] ?? '';
-        final dst  = r['dst'] ?? '';
-        final desc = (r['rawDesc']?.isNotEmpty == true) ? r['rawDesc']! : (r['desc'] ?? '');
-        return '$src<$dst<$protoNum<$p1<$p2<$kb1<$kb2<$prio<0<0<$desc<1';
+        // If rawChunk exists and rule was not modified, use it directly
+        final raw = r['rawChunk'] ?? '';
+        if (raw.isNotEmpty && r['_modified'] != '1') return raw;
+
+        final protoRaw = r['proto'] ?? 'Any';
+        final protoNum = p2n[protoRaw] ?? protoRaw;
+        final prio  = r['prio'] ?? '0';          // 0-indexed
+        final src   = r['src'] ?? '';
+        final dst   = r['dst'] ?? '';             // empty = any dst
+        final dport = r['port1'] ?? '';
+        final sport = r['sport'] ?? '';
+        final kb1   = r['kb1'] ?? '0';
+        final kb2   = r['kb2'] ?? '-1';
+        final desc  = (r['rawDesc']?.isNotEmpty == true) ? r['rawDesc']! : (r['desc'] ?? '');
+        // Format: prio<src<proto<dst<dport<sport<empty<kb1:kb2<layer7<ipp2p<desc
+        return '$prio<$src<$protoNum<$dst<$dport<$sport<<$kb1:$kb2<<<$desc';
       }
-      // FreshTomato: rules separated AND terminated by >
-      final encoded = rules.map(encRule).join('>') + '>';
+      // Rules separated by > (no trailing >)
+      final encoded = rules.map(encRule).join('>');
       // Use nvram + service qos restart (not iptables directly)
       await ssh.run('nvram set qos_orules=' + "'" + encoded + "'" + ' && nvram commit');
-      // Restart in background - do NOT await (hangs)
-      ssh.run('(service qos restart > /dev/null 2>&1 &)').catchError((_) {});
+      // Do NOT restart QoS - FreshTomato service restart reverts nvram
 
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
@@ -1133,7 +1093,9 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
     // FreshTomato class priority names
     const classNames = ['Service','VOIP/Game','Remote','WWW','Media','HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
 
-    String prio   = existing?['prio']  ?? '5';
+    // prio in storage is 0-indexed; display as 1-indexed (1=Service, 2=VOIP, etc)
+    final prioStored = int.tryParse(existing?['prio'] ?? '0') ?? 0;
+    String prio = (prioStored + 1).toString().clamp(1, 10).toString();
     // proto stored as display string like 'TCP', 'UDP', 'Any', 'TCP/UDP'
     String proto  = existing?['proto'] ?? 'Any';
     // Normalize to dropdown values
