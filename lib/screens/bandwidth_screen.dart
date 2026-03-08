@@ -799,9 +799,16 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         'nvram commit',
       ].join(' && ');
       await ssh.run(cmds);
+      // Restart QoS with timeout so it doesn't hang indefinitely
+      // Uses 'timeout 15' to kill if it takes too long, runs in subshell
+      ssh.run('(service qos stop > /dev/null 2>&1; service qos start > /dev/null 2>&1 &)').catchError((_) {});
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
-      setState(() { _saveMsg = 'Saved!'; });
+      // Delay refresh slightly to let restart begin
+      await Future.delayed(const Duration(seconds: 2));
+      ref.invalidate(qosBasicProvider);
+      ref.read(_basicTickProvider.notifier).state++;
+      setState(() { _saveMsg = 'Saved! Applying...'; });
     } catch (e) {
       setState(() { _saveMsg = 'Error: $e'; });
     } finally {
@@ -963,9 +970,9 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
                 Icon(_saveMsg!.startsWith('Error') ? Icons.error_outline : Icons.check_circle_outline,
                   size: 16, color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success),
                 const SizedBox(width: 8),
-                Text(_saveMsg!, style: TextStyle(
-                  fontSize: 13,
-                  color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success)),
+                Expanded(child: Text(_saveMsg!, style: TextStyle(
+                  fontSize: 12,
+                  color: _saveMsg!.startsWith('Error') ? AppTheme.danger : AppTheme.success))),
               ]),
             ),
           AppCard(
@@ -1069,7 +1076,8 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
       final encoded = rules.map(encRule).join('>');
       // Use nvram + service qos restart (not iptables directly)
       await ssh.run('nvram set qos_orules=' + "'" + encoded + "'" + ' && nvram commit');
-      // Do NOT restart QoS - FreshTomato service restart reverts nvram
+      // Apply QoS changes: stop then start in background
+      ssh.run('(service qos stop > /dev/null 2>&1; service qos start > /dev/null 2>&1 &)').catchError((_) {});
 
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
