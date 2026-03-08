@@ -153,8 +153,9 @@ final qosClassifyProvider = FutureProvider.autoDispose<List<Map<String, String>>
 
       rules.add({
         'prio': prio, 'src': src, 'dst': dst,
-        'proto': proto, 'srcport': port1, 'dstport': port1,
+        'proto': proto, 'srcport': port1, 'dstport': port2,
         'port1': port1, 'port2': port2,
+        'kb1': kb1, 'kb2': kb2,
         'portDisplay': portDisplay, 'xferDisplay': xferDisplay,
         'desc': label, 'rawDesc': desc, 'className': className,
       });
@@ -814,18 +815,19 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final ssh = ref.read(sshServiceProvider);
     setState(() { _saving = true; _saveMsg = null; });
     try {
+      // Build nvram set commands (no service restart - it hangs)
       final cmds = [
         'nvram set qos_enable=${enabled ? 1 : 0}',
         'nvram set qos_type=$type',
         if (type == '0' && defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
         if (type == '3') 'nvram set qos_cmode=$cmode',
-        // Always save bandwidth even if empty (clear old value)
         'nvram set qos_obw=${obw.isNotEmpty ? obw : '0'}',
         'nvram set qos_ibw=${ibw.isNotEmpty ? ibw : '0'}',
         'nvram commit',
-        'service qos restart 2>/dev/null || service restart_qos 2>/dev/null || true',
       ].join(' && ');
       await ssh.run(cmds);
+      // Restart QoS in background - do NOT await (it hangs indefinitely)
+      ssh.run('(service qos restart > /dev/null 2>&1 &)').catchError((_) {});
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
       setState(() { _saveMsg = 'Saved!'; });
@@ -1097,8 +1099,9 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
         String protoNum = p2n[rawProto] ?? rawProto;
         final p1  = (r['port1']?.isNotEmpty == true && r['port1'] != '0') ? r['port1']! : '';
         final p2  = (r['port2']?.isNotEmpty == true && r['port2'] != '0') ? r['port2']! : p1;
-        // If port set but proto=0(any), use 256(TCP+UDP) - iptables requires specific proto for port matching
-        if (p1.isNotEmpty && protoNum == '0') protoNum = '256';
+        // If port set: use TCP(6) only - proto 256(TCP/UDP) causes iptables --port error
+        // on iptables 1.8.11. For UDP+port use separate rule with proto=17.
+        if (p1.isNotEmpty && (protoNum == '0' || protoNum == '256')) protoNum = '6';
         final kb1 = r['kb1']?.isNotEmpty == true ? r['kb1']! : '0';
         final kb2 = r['kb2']?.isNotEmpty == true ? r['kb2']! : '-1';
         final prio = r['prio'] ?? '5';
@@ -1111,7 +1114,8 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
       final encoded = rules.map(encRule).join('>') + '>';
       // Use nvram + service qos restart (not iptables directly)
       await ssh.run('nvram set qos_orules=' + "'" + encoded + "'" + ' && nvram commit');
-      ssh.run('(service qos restart > /dev/null 2>&1 &)').timeout(const Duration(seconds: 3), onTimeout: () => '').catchError((_) => '');
+      // Restart in background - do NOT await (hangs)
+      ssh.run('(service qos restart > /dev/null 2>&1 &)').catchError((_) {});
 
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
@@ -1190,7 +1194,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
                   DropdownMenuItem(value: 'Any',     child: Text('Any')),
                   DropdownMenuItem(value: 'TCP',     child: Text('TCP')),
                   DropdownMenuItem(value: 'UDP',     child: Text('UDP')),
-                  DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP')),
+                  DropdownMenuItem(value: 'TCP/UDP', child: Text('TCP/UDP (saved as TCP)')),
                   DropdownMenuItem(value: 'ICMP',    child: Text('ICMP')),
                 ],
                 onChanged: (v) => setS(() => proto = v ?? 'Any'),
