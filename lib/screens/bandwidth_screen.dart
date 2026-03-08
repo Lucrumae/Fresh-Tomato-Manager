@@ -787,22 +787,15 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final ssh = ref.read(sshServiceProvider);
     setState(() { _saving = true; _saveMsg = null; });
     try {
-      // Build nvram set commands (no service restart - it reverts nvram on FreshTomato)
       final obwVal = obw.isNotEmpty ? obw : '0';
       final ibwVal = ibw.isNotEmpty ? ibw : '0';
       final cmds = [
         'nvram set qos_enable=${enabled ? 1 : 0}',
         'nvram set qos_type=$type',
-        'nvram set qos_default=$defaultClass',
+        if (defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
         if (type == '3') 'nvram set qos_cmode=$cmode',
-        if (type == '3' && sched.isNotEmpty) 'nvram set qos_sched=$sched',
-        if (type == '3') 'nvram set qos_cake_wash=${cakeWash ? 1 : 0}',
         'nvram set qos_obw=$obwVal',
         'nvram set qos_ibw=$ibwVal',
-        'nvram set qos_ackfilter=${ack ? 1 : 0}',
-        'nvram set qos_icmp=${icmp ? 1 : 0}',
-        'nvram set qos_classify=${classify ? 1 : 0}',
-        'nvram set qos_udp=${udpNoIng ? 1 : 0}',
         'nvram commit',
       ].join(' && ');
       await ssh.run(cmds);
@@ -818,17 +811,11 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
 
   void _showEditDialog(BuildContext ctx, Map<String, String> d) {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
-    bool enabled   = (d['enable']   ?? '0') == '1';
-    bool ack       = (d['ack']      ?? '0') == '1';
-    bool icmp      = (d['icmp']     ?? '0') == '1';
-    bool classify  = (d['classify'] ?? '1') == '1';
-    bool cakeWash  = (d['cake_wash']?? '0') == '1';
-    bool udpNoIng  = (d['udp_noing']?? '0') == '1';
-    String type    = (d['type'] ?? '0') == '3' ? '3' : '0';
-    String cmode   = d['cmode'] ?? '0';
-    String sched   = d['sched'] ?? 'fq_codel';
-    String obw     = d['obw'] ?? '';
-    String ibw     = d['ibw'] ?? '';
+    bool enabled = (d['enable'] ?? '0') == '1';
+    String type  = (d['type'] ?? '0') == '3' ? '3' : '0';
+    String cmode = d['cmode'] ?? '0';
+    String obw   = d['obw']   ?? '';
+    String ibw   = d['ibw']   ?? '';
     const classOpts = ['Service','VOIP/Game','Remote','WWW','Media',
         'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
     final rawDef = d['default'] ?? '';
@@ -840,91 +827,71 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
       MapEntry('3', '3 priority [diffserv3] - DSCP'),
       MapEntry('4', '8 priority [precedence] - ToS'),
     ];
-    const schedOpts = ['fq_codel','sfq','tbf','pfifo','bfifo','cake'];
     final obwCtrl = TextEditingController(text: obw);
     final ibwCtrl = TextEditingController(text: ibw);
-    InputDecoration dec(String l) => InputDecoration(
-        labelText: l, border: const OutlineInputBorder(), isDense: true);
-    Widget chk(String label, bool val, Function(bool) cb) =>
-      InkWell(onTap: () => cb(!val), child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 3),
-        child: Row(children: [
-          SizedBox(width: 24, height: 24, child: Checkbox(value: val,
-            activeColor: accent, onChanged: (v) => cb(v ?? false))),
-          const SizedBox(width: 8),
-          Expanded(child: Text(label, style: const TextStyle(fontSize: 13))),
-        ])));
 
     showDialog(
       context: ctx,
       builder: (dCtx) => StatefulBuilder(
         builder: (dCtx, setS) => AlertDialog(
           backgroundColor: Theme.of(ctx).colorScheme.surface,
-          title: const Text('QoS Settings'),
-          content: SizedBox(width: double.maxFinite, child: SingleChildScrollView(
-            child: Column(mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                const Text('QoS Enabled', style: TextStyle(fontWeight: FontWeight.w500)),
-                Switch(value: enabled, activeColor: accent,
-                  onChanged: (v) => setS(() => enabled = v)),
-              ]),
-              const SizedBox(height: 12),
-              DropdownButtonFormField<String>(
-                value: type,
-                decoration: dec('QoS Mode'),
-                items: const [
-                  DropdownMenuItem(value: '0', child: Text('HTB (classic)')),
-                  DropdownMenuItem(value: '3', child: Text('CAKE AQM')),
-                ],
-                onChanged: (v) => setS(() => type = v ?? '0'),
-              ),
-              const SizedBox(height: 10),
-              StatefulBuilder(builder: (_, ss) => Column(children: [
-                chk('Prioritize small packets (ACK/SYN/FIN/RST)', ack,
-                  (v) => setS(() => ack = v)),
-                chk('Prioritize ICMP', icmp, (v) => setS(() => icmp = v)),
-                chk('Classify traffic', classify, (v) => setS(() => classify = v)),
-                chk('No Ingress QoS for UDP', udpNoIng, (v) => setS(() => udpNoIng = v)),
-              ])),
-              const SizedBox(height: 12),
+          title: const Text('QoS Basic Settings'),
+          content: SingleChildScrollView(child: Column(
+              mainAxisSize: MainAxisSize.min, children: [
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              const Text('QoS Enabled', style: TextStyle(fontWeight: FontWeight.w500)),
+              Switch(value: enabled, activeColor: accent,
+                onChanged: (v) => setS(() => enabled = v)),
+            ]),
+            const SizedBox(height: 14),
+            DropdownButtonFormField<String>(
+              value: type,
+              decoration: const InputDecoration(labelText: 'Mode', border: OutlineInputBorder()),
+              items: const [
+                DropdownMenuItem(value: '0', child: Text('HTB (classic)')),
+                DropdownMenuItem(value: '3', child: Text('CAKE AQM')),
+              ],
+              onChanged: (v) => setS(() => type = v ?? '0'),
+            ),
+            const SizedBox(height: 14),
+            if (type == '0') ...[
               DropdownButtonFormField<String>(
                 value: defClass, isExpanded: true,
-                decoration: dec('Default Class'),
+                decoration: const InputDecoration(labelText: 'Default Class', border: OutlineInputBorder()),
                 items: classOpts.map((o) =>
                   DropdownMenuItem(value: o, child: Text(o))).toList(),
                 onChanged: (v) => setS(() => defClass = v ?? 'Service'),
               ),
-              const SizedBox(height: 12),
-              if (type == '3') ...[
-                DropdownButtonFormField<String>(
-                  value: cakeModeList.any((e) => e.key == cmode) ? cmode : '0',
-                  isExpanded: true,
-                  decoration: dec('CAKE Mode'),
-                  items: cakeModeList.map((e) => DropdownMenuItem(
-                    value: e.key,
-                    child: Text(e.value, style: const TextStyle(fontSize: 12)))).toList(),
-                  onChanged: (v) => setS(() => cmode = v ?? '0'),
-                ),
-                const SizedBox(height: 12),
-                DropdownButtonFormField<String>(
-                  value: schedOpts.contains(sched) ? sched : 'fq_codel',
-                  decoration: dec('Qdisc Scheduler'),
-                  items: schedOpts.map((o) =>
-                    DropdownMenuItem(value: o, child: Text(o))).toList(),
-                  onChanged: (v) => setS(() => sched = v ?? 'fq_codel'),
-                ),
-                const SizedBox(height: 4),
-                chk('CAKE Wash (clear diffserv inbound)', cakeWash,
-                  (v) => setS(() => cakeWash = v)),
-                const SizedBox(height: 12),
-              ],
-              TextField(controller: obwCtrl, keyboardType: TextInputType.number,
-                decoration: dec('Upload / Outbound Bandwidth (kbit/s)')),
-              const SizedBox(height: 12),
-              TextField(controller: ibwCtrl, keyboardType: TextInputType.number,
-                decoration: dec('Download / Inbound Bandwidth (kbit/s)')),
-            ]))),
+              const SizedBox(height: 14),
+            ],
+            if (type == '3') ...[
+              DropdownButtonFormField<String>(
+                value: cakeModeList.any((e) => e.key == cmode) ? cmode : '0',
+                isExpanded: true,
+                decoration: const InputDecoration(labelText: 'CAKE Mode', border: OutlineInputBorder()),
+                items: cakeModeList.map((e) => DropdownMenuItem(
+                  value: e.key,
+                  child: Text(e.value, style: const TextStyle(fontSize: 13)))).toList(),
+                onChanged: (v) => setS(() => cmode = v ?? '0'),
+              ),
+              const SizedBox(height: 14),
+            ],
+            TextField(
+              controller: obwCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Upload Bandwidth (kbit/s)',
+                border: OutlineInputBorder(), hintText: 'e.g. 10000'),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: ibwCtrl,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Download Bandwidth (kbit/s)',
+                border: OutlineInputBorder(), hintText: 'e.g. 50000'),
+            ),
+          ])),
           actions: [
             TextButton(onPressed: () => Navigator.pop(dCtx), child: const Text('Cancel')),
             ElevatedButton(
@@ -932,10 +899,9 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
               onPressed: () {
                 Navigator.pop(dCtx);
                 _save(d,
-                  enabled: enabled, type: type, cmode: cmode, sched: sched,
+                  enabled: enabled, type: type, cmode: cmode,
                   obw: obwCtrl.text.trim(), ibw: ibwCtrl.text.trim(),
-                  defaultClass: defClass, ack: ack, icmp: icmp,
-                  classify: classify, cakeWash: cakeWash, udpNoIng: udpNoIng);
+                  defaultClass: type == '0' ? defClass : '');
               },
               child: const Text('Apply', style: TextStyle(color: Colors.white)),
             ),
