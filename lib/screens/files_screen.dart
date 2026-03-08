@@ -225,7 +225,7 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       // Baca file sebagai stream 64KB per chunk
       int sent = 0;
       await for (final chunk in localFile.openRead()) {
-        session.stdin.add(chunk);
+        session.stdin.add(chunk is Uint8List ? chunk : Uint8List.fromList(chunk));
         sent += chunk.length;
         setState(() => transfer.progress =
           (sent / fileSize).clamp(0.0, 0.99));
