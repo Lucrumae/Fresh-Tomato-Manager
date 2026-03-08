@@ -9,6 +9,10 @@ class RouterStatus {
   final String firmware;
   final String routerModel;
   final String wifiSsid;
+  final String wifiSsid5;
+  final bool wifi24enabled;
+  final bool wifi5enabled;
+  final bool wifi5present;
   final double cpuTempC;
   final bool isOnline;
 
@@ -17,6 +21,10 @@ class RouterStatus {
     required this.uptime, required this.wanIp, required this.lanIp,
     required this.firmware, required this.routerModel,
     required this.wifiSsid, required this.isOnline,
+    this.wifiSsid5 = '',
+    this.wifi24enabled = true,
+    this.wifi5enabled = true,
+    this.wifi5present = false,
     this.cpuTempC = 0,
   });
 

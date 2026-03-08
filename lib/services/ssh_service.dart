@@ -111,6 +111,15 @@ nvram get lan_ipaddr
 nvram get wl0_ssid
 nvram get t_model_name
 nvram get os_version
+nvram get wl1_ssid
+nvram get wl0_radio
+nvram get wl1_radio
+nvram get wl0_channel
+nvram get wl1_channel
+nvram get wl0_security_mode
+nvram get wl1_security_mode
+nvram get wl0_crypto
+nvram get wl1_crypto
 ''');
       return _parseStatus(output);
     } catch (e) {
@@ -374,6 +383,15 @@ nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
       }
 
       final nvram = sections['NVRAM'] ?? [];
+      final ssid5  = nvram.length > 5 ? nvram[5].trim() : '';
+      final r24    = nvram.length > 6 ? nvram[6].trim() : '1';
+      final r5     = nvram.length > 7 ? nvram[7].trim() : '1';
+      final ch24   = nvram.length > 8 ? nvram[8].trim() : '';
+      final ch5    = nvram.length > 9 ? nvram[9].trim() : '';
+      final sec24  = nvram.length > 10 ? nvram[10].trim() : '';
+      final sec5   = nvram.length > 11 ? nvram[11].trim() : '';
+      final cry24  = nvram.length > 12 ? nvram[12].trim() : '';
+      final cry5   = nvram.length > 13 ? nvram[13].trim() : '';
       return RouterStatus(
         cpuPercent: cpuPercent.clamp(0, 100),
         ramUsedMB: (memUsed / 1024).round(),
@@ -384,6 +402,10 @@ nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
         wifiSsid: nvram.length > 2 ? nvram[2] : '-',
         routerModel: nvram.length > 3 ? nvram[3] : 'FreshTomato',
         firmware: nvram.length > 4 ? nvram[4] : '-',
+        wifiSsid5: ssid5,
+        wifi24enabled: r24 != '0',
+        wifi5enabled: r5 != '0',
+        wifi5present: ssid5.isNotEmpty,
         isOnline: true,
         cpuTempC: cpuTempC,
       );
