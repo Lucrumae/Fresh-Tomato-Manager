@@ -24,19 +24,24 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    final enable = (await ssh.run('nvram get qos_enable')).trim();
-    final type   = (await ssh.run('nvram get qos_type')).trim();
-    final defCls = (await ssh.run('nvram get qos_default')).trim();
-    final obw    = (await ssh.run('nvram get qos_obw')).trim();
-    final ibw    = (await ssh.run('nvram get qos_ibw')).trim();
-    final cmode  = (await ssh.run('nvram get qos_cmode 2>/dev/null || echo 0')).trim();
+    // Single SSH call - more reliable than 6 separate calls
+    final raw = (await ssh.run(
+      'printf "%s\n" '
+      '"$(nvram get qos_enable)" '
+      '"$(nvram get qos_type)" '
+      '"$(nvram get qos_default)" '
+      '"$(nvram get qos_obw)" '
+      '"$(nvram get qos_ibw)" '
+      '"$(nvram get qos_cmode 2>/dev/null || echo 0)"'
+    )).trim();
+    final vals = raw.split('\n').map((s) => s.trim()).toList();
     return {
-      'enable':  enable.isEmpty ? '0' : enable,
-      'type':    type.isEmpty   ? '0' : type,
-      'default': defCls,
-      'obw':     obw,
-      'ibw':     ibw,
-      'cmode':   cmode.isEmpty  ? '0' : cmode,
+      'enable':  vals.length > 0 && vals[0].isNotEmpty ? vals[0] : '0',
+      'type':    vals.length > 1 && vals[1].isNotEmpty ? vals[1] : '0',
+      'default': vals.length > 2 ? vals[2] : '',
+      'obw':     vals.length > 3 ? vals[3] : '',
+      'ibw':     vals.length > 4 ? vals[4] : '',
+      'cmode':   vals.length > 5 && vals[5].isNotEmpty ? vals[5] : '0',
     };
   } catch (_) { return {}; }
 });
@@ -1109,7 +1114,8 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
       // FreshTomato: rules separated AND terminated by >
       final encoded = rules.map(encRule).join('>') + '>';
       // Use nvram + service qos restart (not iptables directly)
-      await ssh.run("nvram set qos_orules='\$encoded' && nvram commit && service qos restart 2>/dev/null || service restart_qos 2>/dev/null || true");
+      await ssh.run('nvram set qos_orules=' + "'" + encoded + "'" + ' && nvram commit');
+      ssh.run('(service qos restart > /dev/null 2>&1 &)').timeout(const Duration(seconds: 3), onTimeout: () => '').catchError((_) => '');
 
       ref.invalidate(qosClassifyProvider);
     } catch (e) {
