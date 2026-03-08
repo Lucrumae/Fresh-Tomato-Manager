@@ -526,13 +526,23 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
         'nvram get wl1_security_mode'
       );
       final parts = r.split('---').map((s) => s.trim()).toList();
+      // Map nvram security_mode values to dropdown keys
+      String mapSec(String s) {
+        if (s == 'wpa2_personal') return 'psk2';
+        if (s == 'wpa_personal')  return 'psk';
+        if (s == 'wpa2_enterprise') return 'wpa2';
+        if (s == 'wpa_enterprise')  return 'wpa';
+        if (s == 'wpa_personal wpa2_personal') return 'psk psk2';
+        if (s.isEmpty) return 'psk2';
+        return s;
+      }
       if (mounted) setState(() {
         if (parts.length > 0) _pass24.text = parts[0];
         if (parts.length > 1) _ch24.text   = parts[1];
-        if (parts.length > 2) _sec24       = parts[2].isEmpty ? 'psk2' : parts[2];
+        if (parts.length > 2) _sec24       = mapSec(parts[2]);
         if (parts.length > 3) _pass5.text  = parts[3];
         if (parts.length > 4) _ch5.text    = parts[4];
-        if (parts.length > 5) _sec5        = parts[5].isEmpty ? 'psk2' : parts[5];
+        if (parts.length > 5) _sec5        = mapSec(parts[5]);
       });
     } catch (_) {}
   }
@@ -541,10 +551,23 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
     final ssh = ref.read(sshServiceProvider);
     setState(() { _saving = true; _msg = null; });
     try {
+      // Map dropdown value to nvram security_mode format
+      String toNvramSec(String s) {
+        if (s == 'psk2')     return 'wpa2_personal';
+        if (s == 'psk')      return 'wpa_personal';
+        if (s == 'wpa2')     return 'wpa2_enterprise';
+        if (s == 'wpa')      return 'wpa_enterprise';
+        if (s == 'psk psk2') return 'wpa_personal wpa2_personal';
+        if (s == 'open')     return 'disabled';
+        return s;
+      }
+      final sec24nvram = toNvramSec(_sec24);
+      final sec5nvram  = toNvramSec(_sec5);
       final cmds = <String>[
         "nvram set wl0_ssid='${_ssid24.text}'",
         "nvram set wl0_radio=${_radio24 ? 1 : 0}",
-        "nvram set wl0_security_mode='$_sec24'",
+        "nvram set wl0_security_mode='$sec24nvram'",
+        "nvram set wl0_crypto='aes'",
         if (_pass24.text.isNotEmpty) "nvram set wl0_wpa_psk='${_pass24.text}'",
         if (_ch24.text.isNotEmpty)   "nvram set wl0_channel='${_ch24.text}'",
       ];
@@ -552,15 +575,21 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
         cmds.addAll([
           "nvram set wl1_ssid='${_ssid5.text}'",
           "nvram set wl1_radio=${_radio5 ? 1 : 0}",
-          "nvram set wl1_security_mode='$_sec5'",
+          "nvram set wl1_security_mode='$sec5nvram'",
+          "nvram set wl1_crypto='aes'",
           if (_pass5.text.isNotEmpty) "nvram set wl1_wpa_psk='${_pass5.text}'",
           if (_ch5.text.isNotEmpty)   "nvram set wl1_channel='${_ch5.text}'",
         ]);
       }
       cmds.add('nvram commit');
       await ssh.run(cmds.join(' && '));
-      // Restart wireless
-      ssh.run('(service wireless restart > /dev/null 2>&1 &)').catchError((_){});
+      // Restart wireless - FreshTomato: restart eapd+nas+wl driver per interface
+      ssh.run(
+        '(wlconf eth1 up; wlconf eth2 up;'
+        ' killall -HUP eapd 2>/dev/null;'
+        ' killall -HUP nas 2>/dev/null;'
+        ' service wireless restart > /dev/null 2>&1) &'
+      ).catchError((_){});
       setState(() => _msg = 'Saved! Applying WiFi settings...');
       // Refresh status
       await Future.delayed(const Duration(seconds: 2));
@@ -654,7 +683,6 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
                 (v) => setState(() => _sec24 = v)),
 
               if (widget.status.wifi5present) ...[
-
                 const SizedBox(height: 20),
                 // --- 5GHz ---
                 _sectionHeader(context, '5 GHz', _radio5,
@@ -713,7 +741,7 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
         labelText: label,
         labelStyle: TextStyle(color: c.textMuted, fontSize: 13),
         filled: true,
-        fillColor: c.surfaceVariant,
+        fillColor: c.surface,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none),
@@ -732,7 +760,7 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
         labelText: label,
         labelStyle: TextStyle(color: c.textMuted, fontSize: 13),
         filled: true,
-        fillColor: c.surfaceVariant,
+        fillColor: c.surface,
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(10),
           borderSide: BorderSide.none),

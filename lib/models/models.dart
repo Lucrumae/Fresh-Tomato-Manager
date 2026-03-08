@@ -38,7 +38,9 @@ class RouterStatus {
     cpuPercent: 0, ramUsedMB: 0, ramTotalMB: 0,
     uptime: '-', wanIp: '-', lanIp: '-',
     firmware: '-', routerModel: 'FreshTomato Router',
-    wifiSsid: '-', isOnline: false, cpuTempC: 0,
+    wifiSsid: '-', wifiSsid5: '',
+    wifi24enabled: true, wifi5enabled: true, wifi5present: false,
+    isOnline: false, cpuTempC: 0,
   );
 }
 

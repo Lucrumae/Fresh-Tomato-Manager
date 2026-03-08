@@ -183,17 +183,21 @@ nvram get wl1_crypto
       else if (tempVal > 0) cpuTempC = tempVal;
 
       return RouterStatus(
-        cpuPercent:  cpuPercent.clamp(0.0, 100.0),
-        ramUsedMB:   (memUsed / 1024).round(),
-        ramTotalMB:  (memTotal / 1024).round(),
-        uptime:      current.uptime,
-        wanIp:       current.wanIp,
-        lanIp:       current.lanIp,
-        wifiSsid:    current.wifiSsid,
-        routerModel: current.routerModel,
-        firmware:    current.firmware,
-        isOnline:    true,
-        cpuTempC:    cpuTempC,
+        cpuPercent:    cpuPercent.clamp(0.0, 100.0),
+        ramUsedMB:     (memUsed / 1024).round(),
+        ramTotalMB:    (memTotal / 1024).round(),
+        uptime:        current.uptime,
+        wanIp:         current.wanIp,
+        lanIp:         current.lanIp,
+        wifiSsid:      current.wifiSsid,
+        wifiSsid5:     current.wifiSsid5,
+        wifi24enabled: current.wifi24enabled,
+        wifi5enabled:  current.wifi5enabled,
+        wifi5present:  current.wifi5present,
+        routerModel:   current.routerModel,
+        firmware:      current.firmware,
+        isOnline:      true,
+        cpuTempC:      cpuTempC,
       );
     } catch (_) { return current; }
   }
