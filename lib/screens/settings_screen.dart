@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
@@ -33,47 +34,42 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     }
     setState(() => _backupBusy = true);
     try {
-      // FreshTomato: export config via /admin/config.cgi (same as web UI backup)
-      // Trigger the cfg export then read the file
-      final config = ref.read(configProvider);
-      final host = config?.host ?? '192.168.1.1';
+      // FreshTomato backup: write nvram values to file then read line by line
+      // nvram show can be large - write to file first to avoid SSH buffer limits
+      await ssh.run('nvram show > /tmp/nvram_backup.txt 2>/dev/null');
+      final sizeStr = (await ssh.run('wc -c < /tmp/nvram_backup.txt 2>/dev/null || echo 0')).trim();
+      final size = int.tryParse(sizeStr.split('
+').first.trim()) ?? 0;
+      if (size < 10) throw Exception('nvram show returned empty output');
 
-      // Try HTTP download first (most reliable - same as web UI)
-      // wget the config from the router's web interface
-      await ssh.run(
-        'wget -q -O /tmp/tomato_backup.cfg '
-        '"http://admin:admin@$host/admin/config.cgi?asus=1" '
-        '2>/dev/null || true');
-
-      // Check if we got a real file
-      final sizeStr = (await ssh.run(
-        'wc -c < /tmp/tomato_backup.cfg 2>/dev/null || echo 0')).trim();
-      final size = int.tryParse(sizeStr) ?? 0;
-
-      String cfgB64;
-      if (size > 100) {
-        // HTTP method worked
-        cfgB64 = (await ssh.run('base64 /tmp/tomato_backup.cfg')).trim();
-      } else {
-        // Fallback: dump nvram as text (always works)
-        cfgB64 = (await ssh.run('nvram show 2>/dev/null | base64')).trim();
+      // Read in chunks to avoid SSH output buffer limits
+      final lineCount = int.tryParse(
+        (await ssh.run('wc -l < /tmp/nvram_backup.txt')).trim()) ?? 0;
+      final sb = StringBuffer();
+      const chunk = 100; // lines per read
+      for (var i = 1; i <= lineCount + chunk; i += chunk) {
+        final part = await ssh.run('sed -n "${i},${ i + chunk - 1}p" /tmp/nvram_backup.txt');
+        if (part.trim().isEmpty) break;
+        sb.write(part);
+        if (!part.endsWith('
+')) sb.write('
+');
       }
 
-      final bytes = _decodeBase64Loose(cfgB64);
-      if (bytes.isEmpty) throw Exception('Empty backup data');
+      final content = sb.toString();
+      if (content.trim().isEmpty) throw Exception('Could not read backup data');
 
       final savePath = await _resolveDownloadPath('Backup');
       final ts = DateTime.now().toIso8601String()
           .replaceAll(':', '-').substring(0, 19);
-      final ext = size > 100 ? 'cfg' : 'txt';
-      final file = File('$savePath/tomato_$ts.$ext');
-      await file.writeAsBytes(bytes);
+      final file = File('$savePath/tomato_$ts.txt');
+      await file.writeAsString(content);
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('Backup saved: tomato_$ts.$ext  (${bytes.length} bytes)'),
+          content: Text('Backup saved! ${file.path.split('/').last}  ($size bytes)'),
           backgroundColor: AppTheme.success,
-          duration: const Duration(seconds: 4),
+          duration: const Duration(seconds: 5),
         ));
       }
     } catch (e) {
@@ -114,14 +110,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     try {
       final fileBytes = await File(result.files.single.path!).readAsBytes();
       // Upload via base64 to avoid binary SSH issues
-      final b64 = _encodeBase64(fileBytes);
+      final b64 = base64Encode(fileBytes);
       // Write in chunks to avoid command length limits
       await ssh.run('rm -f /tmp/restore.cfg.b64');
       const chunkSize = 2000;
       for (var i = 0; i < b64.length; i += chunkSize) {
-        final chunk = b64.substring(i, i + chunkSize > b64.length ? b64.length : i + chunkSize);
+        final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
+        final chunk = b64.substring(i, end);
         final op = i == 0 ? '>' : '>>';
-        await ssh.run("echo '$chunk' $op /tmp/restore.cfg.b64");
+        await ssh.run("printf '%s' '$chunk' $op /tmp/restore.cfg.b64");
       }
       // Decode and restore
       await ssh.run('base64 -d /tmp/restore.cfg.b64 > /tmp/tomato.cfg');
@@ -234,42 +231,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     return base;
   }
 
-  List<int> _decodeBase64Loose(String s) {
-    // Handle line breaks in base64
-    final clean = s.replaceAll(RegExp(r'\s'), '');
-    // Pad to multiple of 4
-    final padded = clean + '=' * ((4 - clean.length % 4) % 4);
-    // Dart base64 decode
-    final b64 = padded;
-    final result = <int>[];
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    for (var i = 0; i < b64.length - 3; i += 4) {
-      final a = chars.indexOf(b64[i]);
-      final bv = chars.indexOf(b64[i+1]);
-      final cv = b64[i+2] == '=' ? 0 : chars.indexOf(b64[i+2]);
-      final dv = b64[i+3] == '=' ? 0 : chars.indexOf(b64[i+3]);
-      if (a < 0 || bv < 0) continue;
-      result.add((a << 2) | (bv >> 4));
-      if (b64[i+2] != '=') result.add(((bv & 0xf) << 4) | (cv >> 2));
-      if (b64[i+3] != '=') result.add(((cv & 0x3) << 6) | dv);
-    }
-    return result;
-  }
 
-  String _encodeBase64(List<int> bytes) {
-    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-    final sb = StringBuffer();
-    for (var i = 0; i < bytes.length; i += 3) {
-      final b0 = bytes[i];
-      final b1 = i+1 < bytes.length ? bytes[i+1] : 0;
-      final b2 = i+2 < bytes.length ? bytes[i+2] : 0;
-      sb.write(chars[b0 >> 2]);
-      sb.write(chars[((b0 & 3) << 4) | (b1 >> 4)]);
-      sb.write(i+1 < bytes.length ? chars[((b1 & 0xf) << 2) | (b2 >> 6)] : '=');
-      sb.write(i+2 < bytes.length ? chars[b2 & 0x3f] : '=');
-    }
-    return sb.toString();
-  }
 
   @override
   Widget build(BuildContext context) {
