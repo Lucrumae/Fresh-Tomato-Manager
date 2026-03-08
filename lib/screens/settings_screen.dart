@@ -622,6 +622,39 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
             ]),
           ),
 
+          const SizedBox(height: 8),
+
+          // Firmware Upgrade
+          AppCard(
+            onTap: _firmwareBusy ? null : _upgradeFirmware,
+            child: Row(children: [
+              Container(
+                width: 40, height: 40,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF7C3AED).withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: _firmwareBusy
+                  ? const Padding(padding: EdgeInsets.all(10),
+                      child: CircularProgressIndicator(strokeWidth: 2,
+                        color: Color(0xFF7C3AED)))
+                  : const Icon(Icons.system_update_rounded,
+                      color: Color(0xFF7C3AED), size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Upgrade Firmware',
+                    style: Theme.of(context).textTheme.titleSmall),
+                  Text('Flash .trx/.bin firmware file to router',
+                    style: Theme.of(context).textTheme.bodySmall),
+                ],
+              )),
+              const Icon(Icons.chevron_right_rounded),
+            ]),
+          ),
+
           const SizedBox(height: 20),
 
           //  App 
