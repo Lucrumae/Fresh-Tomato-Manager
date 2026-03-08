@@ -1095,7 +1095,7 @@ class _QosClassifyTabState extends ConsumerState<_QosClassifyTab> {
 
     // prio in storage is 0-indexed; display as 1-indexed (1=Service, 2=VOIP, etc)
     final prioStored = int.tryParse(existing?['prio'] ?? '0') ?? 0;
-    String prio = (prioStored + 1).toString().clamp(1, 10).toString();
+    String prio = ((prioStored + 1).clamp(1, 10)).toString();
     // proto stored as display string like 'TCP', 'UDP', 'Any', 'TCP/UDP'
     String proto  = existing?['proto'] ?? 'Any';
     // Normalize to dropdown values
