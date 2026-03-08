@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:async';
+import 'package:crypto/crypto.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -204,6 +205,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           (await ssh.run('wc -c < /tmp/tomato.cfg 2>/dev/null || echo 0')).trim()) ?? 0;
         if (gotSize < fileBytes.length - 1024) {
           throw Exception('Upload incomplete: $gotSize / ${fileBytes.length} bytes');
+        }
+
+        // Verifikasi integrity: bandingkan MD5 file di router vs file asli di HP
+        // Ini lebih reliable dari cek format karena langsung deteksi korupsi transfer
+        final routerMd5Raw = (await ssh.run(
+          'md5sum /tmp/tomato.cfg 2>/dev/null || echo ""'
+        )).trim();
+        final routerMd5 = routerMd5Raw.split(' ').first;
+
+        // Hitung MD5 file asli di HP
+        final digest = md5.convert(fileBytes);
+        final localMd5 = digest.toString();
+
+        if (routerMd5.isNotEmpty && routerMd5 != localMd5) {
+          // File corrupt saat transfer - upload ulang via base64 yang lebih aman
+          await ssh.run('rm -f /tmp/tomato.cfg /tmp/tomato.b64');
+          final b64 = base64Encode(fileBytes);
+          const chunkSize = 2000;
+          for (var i = 0; i < b64.length; i += chunkSize) {
+            final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
+            final chunk = b64.substring(i, end);
+            final op = i == 0 ? '>' : '>>';
+            await ssh.run("printf '%s' '$chunk' $op /tmp/tomato.b64");
+          }
+          await ssh.run('base64 -d /tmp/tomato.b64 > /tmp/tomato.cfg');
+          await ssh.run('rm -f /tmp/tomato.b64');
         }
 
         // Restore binary cfg

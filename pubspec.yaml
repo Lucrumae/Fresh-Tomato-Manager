@@ -26,6 +26,7 @@ dependencies:
   permission_handler: ^11.3.0
   device_info_plus: ^9.1.0
   flutter_foreground_task: ^8.0.0
+  crypto: ^3.0.3
 
 dev_dependencies:
   flutter_test:
