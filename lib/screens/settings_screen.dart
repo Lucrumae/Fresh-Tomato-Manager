@@ -106,14 +106,20 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     setState(() => _restoreBusy = true);
     try {
-      // Baca file backup sebagai text
-      final content = await File(result.files.single.path!).readAsString();
-      final lines = content.split('\n');
+      // Baca file backup sebagai bytes dulu untuk deteksi format
+      final fileBytes = await File(result.files.single.path!).readAsBytes();
 
-      // Deteksi format: text (key=value) atau binary
-      final isText = lines.isNotEmpty &&
-          lines.first.trim().contains('=') &&
-          !lines.first.startsWith('HDR');
+      // Deteksi format dari bytes:
+      // - Text (nvram show): byte pertama adalah ASCII printable
+      // - Binary (web UI cfg): dimulai dengan magic bytes non-ASCII
+      final firstByte = fileBytes.isNotEmpty ? fileBytes[0] : 0;
+      final isText = firstByte >= 32 && firstByte < 127 &&
+          String.fromCharCodes(fileBytes.take(20))
+              .contains(RegExp(r'^[a-zA-Z0-9_]'));
+
+      final lines = isText
+          ? utf8.decode(fileBytes, allowMalformed: true).split('\n')
+          : <String>[];
 
       int restored = 0;
       if (isText) {
@@ -144,7 +150,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
         await ssh.run('nvram commit');
       } else {
         // Format binary - upload dan pakai nvram restore
-        final fileBytes = await File(result.files.single.path!).readAsBytes();
         final b64 = base64Encode(fileBytes);
         await ssh.run('rm -f /tmp/restore.cfg.b64');
         const chunkSize = 2000;
