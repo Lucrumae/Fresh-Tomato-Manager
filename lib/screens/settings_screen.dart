@@ -319,7 +319,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       // Step 4: Flash firmware then erase nvram and reboot
       _showProgress('Step 4/4: Flashing... DO NOT DISCONNECT!');
       ssh.run(
-        'mtd write $fwTmp linux && nvram erase && reboot'
+        '(mtd-write2 $fwTmp linux || '
+        'mtd write $fwTmp linux || '
+        'write $fwTmp linux) && nvram erase && reboot'
       ).catchError((_) {});
 
       if (mounted) {
@@ -404,26 +406,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-
-          // Progress banner for firmware flash
-          if (_progressMsg != null)
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-              decoration: BoxDecoration(
-                color: AppTheme.warning.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: AppTheme.warning),
-              ),
-              child: Row(children: [
-                const SizedBox(width: 18, height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2,
-                    color: AppTheme.warning)),
-                const SizedBox(width: 10),
-                Expanded(child: Text(_progressMsg!,
-                  style: const TextStyle(fontSize: 13, color: AppTheme.warning))),
-              ]),
-            ),
 
           //  Connection 
           AppCard(
@@ -700,6 +682,26 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
               const Icon(Icons.chevron_right_rounded),
             ]),
           ),
+
+          // Progress banner firmware - dekat tombol upgrade
+          if (_progressMsg != null)
+            Container(
+              margin: const EdgeInsets.only(top: 8, bottom: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              decoration: BoxDecoration(
+                color: AppTheme.warning.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppTheme.warning),
+              ),
+              child: Row(children: [
+                const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2,
+                    color: AppTheme.warning)),
+                const SizedBox(width: 10),
+                Expanded(child: Text(_progressMsg!,
+                  style: const TextStyle(fontSize: 13, color: AppTheme.warning))),
+              ]),
+            ),
 
           const SizedBox(height: 20),
 
