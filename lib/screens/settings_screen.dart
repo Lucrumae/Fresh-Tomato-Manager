@@ -106,29 +106,69 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
     setState(() => _restoreBusy = true);
     try {
-      final fileBytes = await File(result.files.single.path!).readAsBytes();
-      // Upload via base64 to avoid binary SSH issues
-      final b64 = base64Encode(fileBytes);
-      // Write in chunks to avoid command length limits
-      await ssh.run('rm -f /tmp/restore.cfg.b64');
-      const chunkSize = 2000;
-      for (var i = 0; i < b64.length; i += chunkSize) {
-        final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
-        final chunk = b64.substring(i, end);
-        final op = i == 0 ? '>' : '>>';
-        await ssh.run("printf '%s' '$chunk' $op /tmp/restore.cfg.b64");
+      // Baca file backup sebagai text
+      final content = await File(result.files.single.path!).readAsString();
+      final lines = content.split('\n');
+
+      // Deteksi format: text (key=value) atau binary
+      final isText = lines.isNotEmpty &&
+          lines.first.trim().contains('=') &&
+          !lines.first.startsWith('HDR');
+
+      int restored = 0;
+      if (isText) {
+        // Format text (nvram show) - set tiap key satu per satu
+        // Kirim dalam batch 10 key per command untuk efisiensi
+        final cmds = <String>[];
+        for (final line in lines) {
+          final trimmed = line.trim();
+          if (trimmed.isEmpty) continue;
+          final eqIdx = trimmed.indexOf('=');
+          if (eqIdx < 1) continue;
+          final key = trimmed.substring(0, eqIdx);
+          final val = trimmed.substring(eqIdx + 1);
+          // Skip read-only / hardware keys
+          if (key.startsWith('wl') && key.contains('_hwaddr')) continue;
+          if (key == 'et0macaddr' || key == 'il0macaddr') continue;
+          final escapedVal = val.replaceAll("'", "'\''");
+          cmds.add("nvram set '$key'='$escapedVal'");
+          restored++;
+        }
+        // Kirim 20 set per SSH call
+        const batch = 20;
+        for (var i = 0; i < cmds.length; i += batch) {
+          final end = (i + batch) > cmds.length ? cmds.length : (i + batch);
+          final batchCmd = cmds.sublist(i, end).join(' && ');
+          await ssh.run(batchCmd);
+        }
+        await ssh.run('nvram commit');
+      } else {
+        // Format binary - upload dan pakai nvram restore
+        final fileBytes = await File(result.files.single.path!).readAsBytes();
+        final b64 = base64Encode(fileBytes);
+        await ssh.run('rm -f /tmp/restore.cfg.b64');
+        const chunkSize = 2000;
+        for (var i = 0; i < b64.length; i += chunkSize) {
+          final end = (i + chunkSize) > b64.length ? b64.length : (i + chunkSize);
+          final chunk = b64.substring(i, end);
+          final op = i == 0 ? '>' : '>>';
+          await ssh.run("printf '%s' '$chunk' $op /tmp/restore.cfg.b64");
+        }
+        await ssh.run('base64 -d /tmp/restore.cfg.b64 > /tmp/tomato.cfg');
+        await ssh.run('nvram restore /tmp/tomato.cfg 2>/dev/null || true');
+        await ssh.run('nvram commit');
+        restored = -1;
       }
-      // Decode and restore
-      await ssh.run('base64 -d /tmp/restore.cfg.b64 > /tmp/tomato.cfg');
-      await ssh.run('nvram restore /tmp/tomato.cfg 2>/dev/null || true');
-      await ssh.run('nvram commit');
-      // Reboot after restore
+
       ssh.run('reboot').catchError((_) {});
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('Configuration restored! Router is rebooting...'),
+        final msg = restored > 0
+            ? 'Restored $restored keys! Router is rebooting...'
+            : 'Configuration restored! Router is rebooting...';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(msg),
           backgroundColor: AppTheme.success,
-          duration: Duration(seconds: 5),
+          duration: const Duration(seconds: 5),
         ));
       }
     } catch (e) {
