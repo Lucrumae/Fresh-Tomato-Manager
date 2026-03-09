@@ -102,7 +102,7 @@ class RouterStatusNotifier extends StateNotifier<RouterStatus> {
     // Fetch full status immediately on start
     fetchFull();
     // Fast poll: CPU/RAM/temp every 2 seconds
-    _fastTimer = Timer.periodic(const Duration(seconds: 2), (_) => fetchFast());
+    _fastTimer = Timer.periodic(const Duration(seconds: 1), (_) => fetchFast());
     // Slow poll: nvram info every 30 seconds
     _slowTimer = Timer.periodic(const Duration(seconds: 30), (_) => fetchFull());
   }
