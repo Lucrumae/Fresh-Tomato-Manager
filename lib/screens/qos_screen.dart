@@ -39,7 +39,7 @@ class _QosScreenState extends ConsumerState<QosScreen> {
         backgroundColor: AppTheme.primary,
         child: const Icon(Icons.add_rounded, color: Colors.white),
       ),
-      body: _loading
+      body: (_loading && rules.isEmpty)
         ? const Center(child: CircularProgressIndicator())
         : rules.isEmpty
           ? _empty()

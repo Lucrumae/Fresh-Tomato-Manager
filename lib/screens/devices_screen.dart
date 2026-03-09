@@ -400,7 +400,7 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
           ),
         ]),
       ),
-      Expanded(child: _loadingConns
+      Expanded(child: (_loadingConns && _conns.isEmpty)
         ? const Center(child: CircularProgressIndicator(strokeWidth: 2))
         : _connError
           ? _empty(Icons.error_outline_rounded,

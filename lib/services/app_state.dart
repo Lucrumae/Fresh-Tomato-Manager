@@ -124,6 +124,8 @@ class RouterStatusNotifier extends StateNotifier<RouterStatus> {
     if (!ssh.isConnected) return;
     final status = await ssh.getStatus();
     if (mounted) state = status;
+    // Also refresh ethernet port state (robocfg is fast, run alongside)
+    _ref.read(ethernetPortsProvider.notifier).fetch();
   }
 
   // Keep fetch() for compatibility
@@ -329,9 +331,20 @@ class PortForwardNotifier extends StateNotifier<List<PortForwardRule>> {
 }
 
 // ─── Ethernet Port State ───────────────────────────────────────────────────────
-final ethernetPortsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
-  ref.watch(routerStatusProvider); // refresh whenever status refreshes
-  final ssh = ref.read(sshServiceProvider);
-  if (!ssh.isConnected) return [];
-  return ssh.getEthernetPorts();
+final ethernetPortsProvider = StateNotifierProvider<EthernetPortsNotifier, List<Map<String, dynamic>>>((ref) {
+  return EthernetPortsNotifier(ref);
 });
+
+class EthernetPortsNotifier extends StateNotifier<List<Map<String, dynamic>>> {
+  final Ref _ref;
+  EthernetPortsNotifier(this._ref) : super([]);
+
+  Future<void> fetch() async {
+    final ssh = _ref.read(sshServiceProvider);
+    if (!ssh.isConnected) return;
+    try {
+      final result = await ssh.getEthernetPorts();
+      if (mounted) state = result;
+    } catch (_) {}
+  }
+}

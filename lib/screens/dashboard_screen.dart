@@ -787,8 +787,8 @@ class _EthernetPortCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final ports = ref.watch(ethernetPortsProvider);
-    final c     = Theme.of(context).extension<AppColors>()!;
+    final portList = ref.watch(ethernetPortsProvider);
+    final c        = Theme.of(context).extension<AppColors>()!;
 
     return AppCard(
       child: Column(
@@ -800,26 +800,13 @@ class _EthernetPortCard extends ConsumerWidget {
             Text('Ethernet Ports', style: Theme.of(context).textTheme.titleSmall),
           ]),
           const SizedBox(height: 14),
-          ports.when(
-            loading: () => const Center(
-              child: Padding(
-                padding: EdgeInsets.all(12),
-                child: CircularProgressIndicator(strokeWidth: 1.5),
-              ),
-            ),
-            error: (_, __) => Text('Could not read port state',
-              style: TextStyle(color: c.textMuted, fontSize: 12)),
-            data: (portList) {
-              if (portList.isEmpty) {
-                return Text('No port data available',
-                  style: TextStyle(color: c.textMuted, fontSize: 12));
-              }
-              return Row(
+          portList.isEmpty
+            ? Text('Loading port state...',
+                style: TextStyle(color: c.textMuted, fontSize: 12))
+            : Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                 children: portList.map((p) => _PortIndicator(port: p, c: c)).toList(),
-              );
-            },
-          ),
+              ),
         ],
       ),
     );

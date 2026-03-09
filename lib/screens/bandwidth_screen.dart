@@ -425,6 +425,8 @@ class _BandwidthBody extends StatelessWidget {
         const SizedBox(height: 12),
 
         history.when(
+          skipLoadingOnReload: true,
+          skipLoadingOnRefresh: true,
           loading: () => const Center(
               child: Padding(
                   padding: EdgeInsets.all(32),
@@ -1105,17 +1107,13 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     if (isFirstLoad) return const Center(child: CircularProgressIndicator());
 
     return basic.when(
-      loading: () {
-        // Use last known data while refreshing - no spinner
-        if (basicData.isNotEmpty) {
-          return _buildBasicContent(context, basicData, accent, c, modeMap, cakeModeMap);
-        }
-        return const Center(child: CircularProgressIndicator());
-      },
+      skipLoadingOnReload: true,
+      skipLoadingOnRefresh: true,
+      loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => basicData.isNotEmpty
           ? _buildBasicContent(context, basicData, accent, c, modeMap, cakeModeMap)
           : Center(child: Text('Error: $e')),
-      data: (d) => _buildBasicContent(context, basicData.isEmpty ? d : d, accent, c, modeMap, cakeModeMap),
+      data: (d) => _buildBasicContent(context, d, accent, c, modeMap, cakeModeMap),
     );
   }
 
@@ -1667,6 +1665,8 @@ class _QosConnectionsTabState extends ConsumerState<_QosConnectionsTab> {
     final c      = Theme.of(context).extension<AppColors>()!;
 
     return conns.when(
+      skipLoadingOnReload: true,
+      skipLoadingOnRefresh: true,
       loading: () => const Center(child: CircularProgressIndicator()),
       error: (e, _) => Center(child: Text('Error: $e')),
       data: (list) {

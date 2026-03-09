@@ -125,7 +125,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
           ),
         ),
       ),
-      body: _loading
+      body: (_loading && ref.read(logsProvider).isEmpty)
         ? const Center(child: CircularProgressIndicator())
         : filtered.isEmpty
           ? Center(child: Column(
