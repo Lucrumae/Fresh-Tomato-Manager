@@ -63,7 +63,7 @@ class ConnectedDevice {
   });
 
   String get displayName => name.isNotEmpty ? name : (hostname.isNotEmpty ? hostname : mac);
-  bool get isWireless => interface.startsWith('wl') || interface == 'wifi';
+  bool get isWireless => interface.startsWith('wl') || interface == 'wifi' || interface == 'eth1' || interface == 'eth2';
   String get connectionType => isWireless ? 'WiFi' : 'Ethernet';
 
   ConnectedDevice copyWith({String? name, bool? isBlocked}) => ConnectedDevice(

@@ -429,7 +429,7 @@ wl -i eth1 assoclist 2>/dev/null || wl assoclist 2>/dev/null || echo ""
 echo "=WL1="
 wl -i eth2 assoclist 2>/dev/null || echo ""
 echo "=LEASES="
-cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || echo ""
+cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || echo ""
 echo "=NAMES="
 nvram get dhcp_static_leases 2>/dev/null || echo ""
 echo "=BLOCK="
@@ -623,6 +623,7 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
   }
 
   //  QoS 
+  // QoS per-device bandwidth rules - main QoS is in bandwidth_screen
   Future<List<QosRule>> getQosRules() async {
     try {
       final output = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
@@ -630,11 +631,11 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
       return output.trim().split('>').where((s) => s.isNotEmpty).map((s) {
         final parts = s.split('<');
         return QosRule(
-          id: parts[0],
-          name: parts.length > 4 ? parts[4] : 'Rule',
-          mac: parts.length > 1 ? parts[1] : '',
-          downloadKbps: int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
-          uploadKbps: int.tryParse(parts.length > 3 ? parts[3] : '0') ?? 0,
+          id: parts.isNotEmpty ? parts[0] : DateTime.now().millisecondsSinceEpoch.toString(),
+          mac: parts.isNotEmpty ? parts[0] : '',
+          downloadKbps: int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0,
+          uploadKbps: int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
+          name: parts.length > 3 ? parts[3] : 'Device',
           enabled: true,
         );
       }).toList();
@@ -645,43 +646,64 @@ iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC
     try {
       final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
       final rules = current.trim().isEmpty ? <String>[] : current.trim().split('>');
-      final newRule = '${rule.id}<${rule.mac}<${rule.downloadKbps}<${rule.uploadKbps}<${rule.name}';
-      final idx = rules.indexWhere((r) => r.startsWith('${rule.id}<'));
+      final newRule = '${rule.mac}<${rule.downloadKbps}<${rule.uploadKbps}<${rule.name}';
+      final idx = rules.indexWhere((r) => r.startsWith('${rule.mac}<'));
       if (idx >= 0) rules[idx] = newRule; else rules.add(newRule);
       await run("nvram set qos_bwrates='${rules.join('>')}' && nvram commit");
       return true;
     } catch (_) { return false; }
   }
 
+
   //  Port Forward 
   Future<List<PortForwardRule>> getPortForwardRules() async {
     try {
       final output = await run('nvram get portforward 2>/dev/null || echo ""');
       if (output.trim().isEmpty) return [];
-      return output.trim().split('>').where((s) => s.isNotEmpty).map((s) {
+      // FreshTomato format: enabled<proto<src_ip<ext_port<int_port<int_ip<desc
+      // enabled: 0=disabled, 1=enabled; proto: 1=tcp, 2=udp, 3=both
+      final rules = <PortForwardRule>[];
+      int i = 0;
+      for (final s in output.trim().split('>').where((s) => s.isNotEmpty)) {
         final parts = s.split('<');
-        return PortForwardRule(
-          id: DateTime.now().microsecondsSinceEpoch.toString(),
-          name: parts.length > 5 ? parts[5] : '',
-          protocol: parts.length > 1 ? parts[1] : 'tcp',
-          externalPort: int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
-          internalPort: int.tryParse(parts.length > 3 ? parts[3] : '0') ?? 0,
-          internalIp: parts.length > 4 ? parts[4] : '',
-          enabled: s.startsWith('on'),
-        );
-      }).toList();
+        if (parts.length < 5) continue;
+        final enabled  = parts[0].trim() != '0';
+        final protoNum = parts[1].trim();
+        final proto    = protoNum == '2' ? 'udp' : protoNum == '3' ? 'both' : 'tcp';
+        // parts[2] = src_ip restriction (often empty)
+        final extPort  = parts.length > 3 ? parts[3].trim() : '';
+        final intPort  = parts.length > 4 ? parts[4].trim() : '';
+        final intIp    = parts.length > 5 ? parts[5].trim() : '';
+        final desc     = parts.length > 6 ? parts[6].trim() : '';
+        if (extPort.isEmpty && intIp.isEmpty) continue;
+        rules.add(PortForwardRule(
+          id: 'pf_${i++}',
+          name: desc.isNotEmpty ? desc : 'Rule ${i}',
+          protocol: proto,
+          externalPort: int.tryParse(extPort.split(':').first.split(',').first) ?? 0,
+          internalPort: int.tryParse(intPort.split(':').first.split(',').first) ?? 0,
+          internalIp: intIp,
+          enabled: enabled,
+        ));
+      }
+      return rules;
     } catch (e) { return []; }
   }
 
   Future<bool> savePortForwardRules(List<PortForwardRule> rules) async {
     try {
-      final data = rules.map((r) =>
-        '${r.enabled ? 'on' : 'off'}<${r.protocol}<${r.externalPort}<${r.internalPort}<${r.internalIp}<${r.name}'
-      ).join('>');
+      // FreshTomato format: enabled<proto<src_ip<ext_port<int_port<int_ip<desc
+      final data = rules.map((r) {
+        final protoNum = r.protocol == 'udp' ? '2' : r.protocol == 'both' ? '3' : '1';
+        final en = r.enabled ? '1' : '0';
+        return '$en<$protoNum<<${r.externalPort}<${r.internalPort}<${r.internalIp}<${r.name}';
+      }).join('>');
       await run("nvram set portforward='$data' && nvram commit");
+      run('(service firewall restart > /dev/null 2>&1 &)').catchError((_){});
       return true;
     } catch (_) { return false; }
   }
+
 
   //  Helpers 
   Map<String, List<String>> _parseSections(String raw) {
