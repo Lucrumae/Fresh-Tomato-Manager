@@ -210,13 +210,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
       if (mounted) {
         final msg = restored > 0
-            ? 'Restored $restored keys! Reboot router manually to apply.'
-            : 'Configuration restored! Reboot router manually to apply.';
+            ? 'Restored $restored keys!'
+            : 'Configuration restored!';
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(msg),
           backgroundColor: AppTheme.success,
-          duration: const Duration(seconds: 6),
+          duration: const Duration(seconds: 3),
         ));
+        // Popup reboot setelah restore berhasil
+        await Future.delayed(const Duration(milliseconds: 400));
+        if (mounted) _offerRebootAfterRestore();
       }
     } catch (e) {
       if (mounted) {
@@ -444,16 +447,76 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
       backgroundColor: Theme.of(context).colorScheme.surface,
       title: Text(title),
       content: Text(msg),
+      actionsAlignment: MainAxisAlignment.center,
       actions: [
-        TextButton(onPressed: () => Navigator.pop(context, false),
-          child: const Text('Cancel')),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(backgroundColor: confirmColor),
-          onPressed: () => Navigator.pop(context, true),
-          child: Text(confirmLabel, style: const TextStyle(color: Colors.white)),
+        // Confirm button di atas
+        SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: confirmColor),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(confirmLabel, style: const TextStyle(color: Colors.white)),
+          ),
+        ),
+        // Cancel di bawah
+        SizedBox(
+          width: double.infinity,
+          child: TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
         ),
       ],
     ));
+
+  // Popup tawaran reboot setelah restore berhasil
+  void _offerRebootAfterRestore() {
+    final ssh = ref.read(sshServiceProvider);
+    showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        backgroundColor: Theme.of(context).colorScheme.surface,
+        title: const Row(children: [
+          Icon(Icons.restart_alt_rounded, color: AppTheme.warning),
+          SizedBox(width: 8),
+          Text('Reboot Router?'),
+        ]),
+        content: const Text(
+          'Configuration restored successfully.\n\n'
+          'Reboot now to apply the changes?'
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              icon: const Icon(Icons.restart_alt_rounded, color: Colors.white),
+              label: const Text('Reboot Now',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+              style: ElevatedButton.styleFrom(backgroundColor: AppTheme.warning),
+              onPressed: () {
+                Navigator.pop(context, true);
+                ssh.run('reboot').catchError((_) {});
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                  content: Text('Router is rebooting...'),
+                  backgroundColor: AppTheme.warning,
+                  duration: Duration(seconds: 4),
+                ));
+              },
+            ),
+          ),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Later'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<String> _resolveDownloadPath(String sub) async {
     // Android: /storage/emulated/0/Download/TomatoManager/<sub>

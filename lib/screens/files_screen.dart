@@ -159,11 +159,13 @@ class _FilesScreenState extends ConsumerState<FilesScreen> {
       final session = await ssh.client!.execute('cat "\${entry.path}"');
 
       // Drain stderr supaya tidak block stdout
-      session.stderr.drain<List<int>>().catchError((_) {});
+      session.stderr.drain<void>().catchError((_) {});
 
       await for (final chunk in session.stdout) {
-        await raf.writeFrom(Uint8List.fromList(chunk));
-        totalBytes += chunk.length;
+        if (chunk == null || chunk.isEmpty) continue;
+        final bytes = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+        await raf.writeFrom(bytes);
+        totalBytes += bytes.length;
         if (fileSize > 0) {
           setState(() => transfer.progress =
             (totalBytes / fileSize).clamp(0.0, 0.99));
