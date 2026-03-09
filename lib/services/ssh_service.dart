@@ -202,40 +202,32 @@ nvram get wl1_crypto
     } catch (_) { return current; }
   }
 
-  //  Traffic history (FreshTomato nvram traff-YYYY-MM format) 
+  //  Traffic history - reads rstats shared memory signal + /proc/net/dev fallback
   Future<Map<String, dynamic>> getTrafficHistory() async {
     try {
-      // FreshTomato stores traffic as: nvram get traff-YYYY-MM
-      // Format per entry: "rxGB rxKB txGB txKB[rxGB rxKB txGB txKB[..." (one per day)
-      // Also try rstats_data (older Tomato builds)
-      final raw = await run(r'''
-echo "=CURRENT="
-YYMM=$(date +%Y-%m)
-CUR=$(nvram get "traff-${YYMM}" 2>/dev/null)
-echo "${YYMM}:${CUR}"
-echo "=MONTHS="
-for M in 0 1 2 3 4 5; do
-  KEY=$(date -d "-${M} month" +%Y-%m 2>/dev/null || date -v-${M}m +%Y-%m 2>/dev/null || echo "")
-  if [ -n "$KEY" ]; then
-    VAL=$(nvram get "traff-${KEY}" 2>/dev/null)
-    if [ -n "$VAL" ]; then echo "${KEY}:${VAL}"; fi
-  fi
-done
-echo "=RSTATS="
-nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
-''');
+      // FreshTomato rstats daemon stores data in shared memory, also writes to
+      // nvram traff-YYYY-MM keys. Try multiple methods.
+      final raw = await run(
+        // Signal rstats to flush current data to nvram
+        r'kill -USR1 $(cat /var/run/rstats.pid 2>/dev/null || pidof rstats 2>/dev/null) 2>/dev/null; '
+        r'sleep 1; '
+        r'echo "=MONTHS="; '
+        // Try to read traff- keys for last 6 months
+        r'for M in $(seq 0 5); do '
+        r'  KEY=$(date -d "-${M} month" +%Y-%m 2>/dev/null); '
+        r'  [ -z "$KEY" ] && continue; '
+        r'  VAL=$(nvram get "traff-${KEY}" 2>/dev/null); '
+        r'  [ -n "$VAL" ] && echo "${KEY}:${VAL}"; '
+        r'done; '
+        r'echo "=DEV="; '
+        // Fallback: read /proc/net/dev for current WAN interface
+        r'WAN=$(nvram get wan_iface 2>/dev/null || echo usb0); '
+        r'cat /proc/net/dev | grep -E "${WAN}|br0" | head -3'
+      );
       return _parseTrafficHistory(raw);
     } catch (e) {
       return {};
     }
-  }
-
-  // Parse "rxGB rxKB txGB txKB" into GB total
-  double _parseTraffBytes(String s) {
-    final p = s.trim().split(RegExp(r'\s+'));
-    final gb = double.tryParse(p.isNotEmpty ? p[0] : '') ?? 0;
-    final kb = double.tryParse(p.length > 1 ? p[1] : '') ?? 0;
-    return gb + kb / (1024.0 * 1024.0);
   }
 
   Map<String, dynamic> _parseTrafficHistory(String raw) {
@@ -247,87 +239,176 @@ nvram get rstats_data 2>/dev/null | head -c 2000 || echo ""
       final lines = raw.split('\n');
       String section = '';
       final monthData = <String, String>{};
+      int devRxBytes = 0, devTxBytes = 0;
 
       for (final line in lines) {
         final t = line.trim();
-        if (t == '=CURRENT=' || t == '=MONTHS=' || t == '=RSTATS=') {
-          section = t;
-          continue;
-        }
+        if (t == '=MONTHS=' || t == '=DEV=') { section = t; continue; }
         if (t.isEmpty) continue;
 
-        if (section == '=CURRENT=' || section == '=MONTHS=') {
-          // format: YYYY-MM:rxGB rxKB txGB txKB[rxGB rxKB txGB txKB[...
+        if (section == '=MONTHS=') {
           final colonIdx = t.indexOf(':');
           if (colonIdx < 7) continue;
           final key = t.substring(0, colonIdx);
           final val = t.substring(colonIdx + 1).trim();
-          if (val.isNotEmpty && !monthData.containsKey(key)) {
+          // Validate key is YYYY-MM format
+          if (RegExp(r'\d{4}-\d{2}').hasMatch(key) && val.isNotEmpty) {
             monthData[key] = val;
           }
+        } else if (section == '=DEV=') {
+          // /proc/net/dev line: "  iface: rx_bytes ... tx_bytes..."
+          final clean = t.replaceAll(RegExp(r'^[^:]+:'), '').trim();
+          final parts = clean.split(RegExp(r'\s+'));
+          if (parts.length >= 9) {
+            devRxBytes += int.tryParse(parts[0]) ?? 0;
+            devTxBytes += int.tryParse(parts[8]) ?? 0;
+          }
         }
       }
 
-      if (monthData.isEmpty) return result;
+      // Build monthly totals from traff- keys
+      if (monthData.isNotEmpty) {
+        final sortedKeys = monthData.keys.toList()..sort((a, b) => b.compareTo(a));
+        final monthlyList = <Map<String, dynamic>>[];
 
-      // Sort months descending
-      final sortedKeys = monthData.keys.toList()..sort((a, b) => b.compareTo(a));
-
-      // Build monthly totals
-      final monthlyList = <Map<String, dynamic>>[];
-      for (final key in sortedKeys) {
-        final entries = monthData[key]!
-            .split('[')
-            .where((s) => s.isNotEmpty)
-            .toList();
-        double totalRx = 0, totalTx = 0;
-        for (final entry in entries) {
-          final clean = entry.replaceAll(']', '').trim();
-          final parts = clean.split(RegExp(r'\s+'));
-          // FreshTomato format: "rxGB rxKB txGB txKB"
-          if (parts.length >= 4) {
-            totalRx += (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
-            totalTx += (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
-          } else if (parts.length >= 2) {
-            // Older format: "rxKB txKB"
-            totalRx += (double.tryParse(parts[0]) ?? 0) / 1024.0;
-            totalTx += (double.tryParse(parts[1]) ?? 0) / 1024.0;
+        for (final key in sortedKeys) {
+          // FreshTomato traff- format: "rxGB rxKB txGB txKB[...]"
+          // Each bracket = one day's data
+          final entries = monthData[key]!
+              .split('[').where((s) => s.isNotEmpty).toList();
+          double totalRx = 0, totalTx = 0;
+          for (final entry in entries) {
+            final parts = entry.replaceAll(']', '').trim().split(RegExp(r'\s+'));
+            if (parts.length >= 4) {
+              totalRx += (double.tryParse(parts[0]) ?? 0)
+                  + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
+              totalTx += (double.tryParse(parts[2]) ?? 0)
+                  + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
+            } else if (parts.length >= 2) {
+              totalRx += (double.tryParse(parts[0]) ?? 0) / 1024.0;
+              totalTx += (double.tryParse(parts[1]) ?? 0) / 1024.0;
+            }
+          }
+          if (totalRx > 0 || totalTx > 0) {
+            monthlyList.add({'month': key, 'rx': totalRx, 'tx': totalTx});
           }
         }
-        if (totalRx > 0 || totalTx > 0) {
-          monthlyList.add({'month': key, 'rx': totalRx, 'tx': totalTx});
-        }
-      }
-      result['monthly'] = monthlyList;
+        result['monthly'] = monthlyList;
 
-      // Build daily from the most recent month
-      if (sortedKeys.isNotEmpty) {
-        final currentVal = monthData[sortedKeys.first]!;
-        final entries = currentVal
-            .split('[')
-            .where((s) => s.isNotEmpty)
-            .toList();
-        final dailyList = <Map<String, dynamic>>[];
-        for (int i = 0; i < entries.length && i < 31; i++) {
-          final clean = entries[i].replaceAll(']', '').trim();
-          final parts = clean.split(RegExp(r'\s+'));
-          double rx = 0, tx = 0;
-          if (parts.length >= 4) {
-            rx = (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
-            tx = (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
-          } else if (parts.length >= 2) {
-            rx = (double.tryParse(parts[0]) ?? 0) / 1024.0;
-            tx = (double.tryParse(parts[1]) ?? 0) / 1024.0;
+        // Daily from most recent month
+        if (sortedKeys.isNotEmpty) {
+          final entries = monthData[sortedKeys.first]!
+              .split('[').where((s) => s.isNotEmpty).toList();
+          final dailyList = <Map<String, dynamic>>[];
+          for (int i = 0; i < entries.length && i < 31; i++) {
+            final parts = entries[i].replaceAll(']', '').trim().split(RegExp(r'\s+'));
+            double rx = 0, tx = 0;
+            if (parts.length >= 4) {
+              rx = (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
+              tx = (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
+            } else if (parts.length >= 2) {
+              rx = (double.tryParse(parts[0]) ?? 0) / 1024.0;
+              tx = (double.tryParse(parts[1]) ?? 0) / 1024.0;
+            }
+            dailyList.add({'day': i + 1, 'rx': rx, 'tx': tx});
           }
-          dailyList.add({'day': i + 1, 'rx': rx, 'tx': tx});
+          result['daily'] = dailyList;
         }
-        result['daily'] = dailyList;
+      } else if (devRxBytes > 0 || devTxBytes > 0) {
+        // Fallback: show current session from /proc/net/dev as today's data
+        final now = DateTime.now();
+        final monthKey = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+        final rxGB = devRxBytes / (1024.0 * 1024.0 * 1024.0);
+        final txGB = devTxBytes / (1024.0 * 1024.0 * 1024.0);
+        result['monthly'] = [{'month': monthKey, 'rx': rxGB, 'tx': txGB}];
+        result['daily']   = [{'day': now.day, 'rx': rxGB, 'tx': txGB}];
       }
     } catch (_) {}
     return result;
   }
 
-  RouterStatus _parseStatus(String raw) {
+  //  Device connections (conntrack) 
+  Future<List<Map<String, dynamic>>> getDeviceConnections(String deviceIp) async {
+    try {
+      // Use conntrack to get active connections for this device IP
+      final raw = await run(
+        'conntrack -L 2>/dev/null | grep "src=$deviceIp " || '
+        'cat /proc/net/ip_conntrack 2>/dev/null | grep "src=$deviceIp " || echo ""'
+      );
+      if (raw.trim().isEmpty) return [];
+
+      final conns = <Map<String, dynamic>>[];
+      for (final line in raw.split('\n')) {
+        final t = line.trim();
+        if (t.isEmpty) continue;
+        // Parse: ipv4 2 tcp 6 TTL STATE src=IP dst=IP sport=N dport=N ...
+        final proto  = RegExp(r'\btcp\b|\budp\b|\bicmp\b').firstMatch(t)?.group(0) ?? '?';
+        final srcIp  = RegExp(r'src=(\S+)').firstMatch(t)?.group(1) ?? '';
+        final dstIp  = RegExp(r'dst=(\S+)').firstMatch(t)?.group(1) ?? '';
+        final dport  = RegExp(r'dport=(\d+)').firstMatch(t)?.group(1) ?? '?';
+        final sport  = RegExp(r'sport=(\d+)').firstMatch(t)?.group(1) ?? '?';
+        final state  = RegExp(r'\b(ESTABLISHED|TIME_WAIT|SYN_SENT|CLOSE_WAIT|LISTEN)\b').firstMatch(t)?.group(0) ?? '';
+        final rxB    = RegExp(r'bytes=(\d+)').firstMatch(t)?.group(1) ?? '0';
+        final pkts   = RegExp(r'packets=(\d+)').firstMatch(t)?.group(1) ?? '0';
+        // Only show connections FROM the device (not reply direction)
+        if (srcIp != deviceIp) continue;
+        if (dstIp.isEmpty || dstIp == '127.0.0.1') continue;
+        conns.add({
+          'proto':  proto.toUpperCase(),
+          'dst':    dstIp,
+          'dport':  int.tryParse(dport) ?? 0,
+          'sport':  int.tryParse(sport) ?? 0,
+          'state':  state,
+          'rxBytes': int.tryParse(rxB) ?? 0,
+          'packets': int.tryParse(pkts) ?? 0,
+        });
+      }
+      // Sort by port (well-known ports first)
+      conns.sort((a, b) => (a['dport'] as int).compareTo(b['dport'] as int));
+      return conns;
+    } catch (e) {
+      return [];
+    }
+  }
+
+  //  QoS per-device bandwidth limit
+  Future<bool> setDeviceBandwidth(String mac, int dlKbps, int ulKbps) async {
+    try {
+      // qos_bwrates format: mac<dl_kbps<ul_kbps<name>...
+      final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
+      final rules   = current.trim().isEmpty
+          ? <String>[]
+          : current.trim().split('>').where((s) => s.isNotEmpty).toList();
+      final macUp   = mac.toUpperCase();
+      // Remove existing rule for this MAC
+      rules.removeWhere((r) => r.toUpperCase().startsWith(macUp));
+      if (dlKbps > 0 || ulKbps > 0) {
+        rules.add('$macUp<$dlKbps<$ulKbps<Device');
+      }
+      await run("nvram set qos_bwrates='${rules.join('>')}' && nvram commit");
+      return true;
+    } catch (_) { return false; }
+  }
+
+  // Get current bandwidth limit for a device
+  Future<Map<String, int>> getDeviceBandwidth(String mac) async {
+    try {
+      final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
+      final macUp = mac.toUpperCase();
+      for (final rule in current.trim().split('>').where((s) => s.isNotEmpty)) {
+        final parts = rule.split('<');
+        if (parts.isNotEmpty && parts[0].toUpperCase() == macUp) {
+          return {
+            'dl': int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0,
+            'ul': int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
+          };
+        }
+      }
+      return {'dl': 0, 'ul': 0};
+    } catch (_) { return {'dl': 0, 'ul': 0}; }
+  }
+
+    RouterStatus _parseStatus(String raw) {
     try {
       final sections = _parseSections(raw);
 

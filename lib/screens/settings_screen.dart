@@ -11,7 +11,6 @@ import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import '../services/app_state.dart';
 import 'setup_screen.dart';
-import 'qos_screen.dart';
 import 'port_forward_screen.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -678,13 +677,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
           //  Network 
           _label(context, l.network),
-          const SizedBox(height: 8),
-          _tile(context, l,
-            icon: Icons.speed_rounded, color: AppTheme.secondary,
-            title: l.qosRules, subtitle: l.qosSubtitle,
-            onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const QosScreen())),
-          ),
           const SizedBox(height: 8),
           _tile(context, l,
             icon: Icons.lan_rounded, color: AppTheme.success,
