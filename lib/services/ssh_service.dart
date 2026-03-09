@@ -291,6 +291,7 @@ nvram get wan_iface
         firmware:      current.firmware,
         isOnline:      true,
         cpuTempC:      cpuTempC,
+        wanIface:      current.wanIface,
       );
     } catch (_) { return current; }
   }
