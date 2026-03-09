@@ -250,7 +250,7 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
     final ssh = ref.read(sshServiceProvider);
     setState(() => _bwLoading = true);
     try {
-      final bw = await ssh.getDeviceBandwidth(widget.device.mac);
+      final bw = await ssh.getDeviceBandwidth(widget.device.ip);
       if (mounted) {
         _dlLimit = bw['dl'] ?? 0;
         _ulLimit = bw['ul'] ?? 0;
@@ -267,7 +267,7 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
     final dl = int.tryParse(_dlCtrl.text.trim()) ?? 0;
     final ul = int.tryParse(_ulCtrl.text.trim()) ?? 0;
     try {
-      final ok = await ssh.setDeviceBandwidth(widget.device.mac, dl, ul);
+      final ok = await ssh.setDeviceBandwidth(widget.device.ip, dl, ul);
       if (mounted) setState(() {
         _dlLimit = dl; _ulLimit = ul;
         _bwMsg = ok
@@ -337,7 +337,7 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
                   ),
                 ],
               )),
-              // Block/Unblock icon button
+              // Block/Unblock icon button with confirmation
               Consumer(builder: (_, ref2, __) => IconButton(
                 icon: Icon(
                   widget.device.isBlocked
@@ -345,11 +345,7 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
                   color: widget.device.isBlocked
                     ? AppTheme.success : AppTheme.danger),
                 tooltip: widget.device.isBlocked ? 'Unblock' : 'Block',
-                onPressed: () async {
-                  await ref2.read(devicesProvider.notifier)
-                    .toggleBlock(widget.device.mac);
-                  if (context.mounted) Navigator.pop(context);
-                },
+                onPressed: () => _confirmBlock(context, ref2),
               )),
               // Rename icon button
               Consumer(builder: (_, ref2, __) => IconButton(
@@ -570,6 +566,47 @@ class _DeviceDetailSheetState extends ConsumerState<_DeviceDetailSheet>
     if (kbps == 0) return '0';
     if (kbps >= 1024) return '${(kbps / 1024).toStringAsFixed(1)} Mbps';
     return '${kbps} Kbps';
+  }
+
+  void _confirmBlock(BuildContext context, WidgetRef ref) async {
+    final isBlocked = widget.device.isBlocked;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text(isBlocked ? 'Unblock Device?' : 'Block Internet Access?'),
+        content: Text(
+          isBlocked
+            ? 'Allow ${widget.device.displayName} to access the internet again?'
+            : 'Block internet access for ${widget.device.displayName}?\n\n'
+              'They will stay connected to WiFi but cannot reach the internet.',
+        ),
+        actionsAlignment: MainAxisAlignment.center,
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: isBlocked ? AppTheme.success : AppTheme.danger),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(isBlocked ? 'Unblock' : 'Block Internet',
+                style: const TextStyle(color: Colors.white,
+                  fontWeight: FontWeight.w600)),
+            ),
+          ),
+          SizedBox(
+            width: double.infinity,
+            child: TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm == true && context.mounted) {
+      await ref.read(devicesProvider.notifier).toggleBlock(widget.device.mac);
+      if (context.mounted) Navigator.pop(context);
+    }
   }
 
   void _rename(BuildContext context, WidgetRef ref) async {

@@ -8,7 +8,11 @@ import '../services/ssh_service.dart';
 import '../models/models.dart';
 
 // Traffic history provider
+// Traffic history - auto refreshes every 60s (rstats flushes ~every minute)
+final _trafficTickProvider = StateProvider<int>((ref) => 0);
+
 final trafficHistoryProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
+  ref.watch(_trafficTickProvider); // re-run on tick
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   return ssh.getTrafficHistory();
@@ -202,6 +206,23 @@ class BandwidthScreen extends ConsumerStatefulWidget {
 
 class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
   bool _showQos = false;
+  Timer? _trafficTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    // Refresh traffic history every 60s (rstats daemon updates ~every 60s)
+    _trafficTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      if (mounted) ref.invalidate(trafficHistoryProvider);
+    });
+    // Also add a manual refresh button
+  }
+
+  @override
+  void dispose() {
+    _trafficTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -346,7 +367,16 @@ class _BandwidthBody extends StatelessWidget {
         const SizedBox(height: 24),
 
         // Usage history section
-        _SectionHeader(title: 'Usage History', icon: Icons.bar_chart_rounded, color: accent),
+        Row(children: [
+          Expanded(child: _SectionHeader(title: 'Usage History', icon: Icons.bar_chart_rounded, color: accent)),
+          IconButton(
+            icon: Icon(Icons.refresh_rounded, size: 18, color: accent),
+            tooltip: 'Refresh',
+            onPressed: () => ref.invalidate(trafficHistoryProvider),
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+          ),
+        ]),
         const SizedBox(height: 12),
 
         history.when(

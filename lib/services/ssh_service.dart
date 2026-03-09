@@ -371,419 +371,72 @@ nvram get wl1_crypto
     }
   }
 
-  //  QoS per-device bandwidth limit
-  Future<bool> setDeviceBandwidth(String mac, int dlKbps, int ulKbps) async {
+  //  Per-device bandwidth limiting via iptables hashlimit
+  // Uses hashlimit module which is reliable on this router's kernel
+  // dlKbps/ulKbps in Kbps (0 = remove limit). deviceIp = LAN IP of device
+  Future<bool> setDeviceBandwidth(String deviceIp, int dlKbps, int ulKbps) async {
     try {
-      // qos_bwrates format: mac<dl_kbps<ul_kbps<name>...
-      final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
-      final rules   = current.trim().isEmpty
-          ? <String>[]
-          : current.trim().split('>').where((s) => s.isNotEmpty).toList();
-      final macUp   = mac.toUpperCase();
-      // Remove existing rule for this MAC
-      rules.removeWhere((r) => r.toUpperCase().startsWith(macUp));
-      if (dlKbps > 0 || ulKbps > 0) {
-        rules.add('$macUp<$dlKbps<$ulKbps<Device');
-      }
-      await run("nvram set qos_bwrates='${rules.join('>')}' && nvram commit");
-      return true;
-    } catch (_) { return false; }
-  }
+      final oct = deviceIp.split('.').last;
+      final dlName = 'bwdl$oct';
+      final ulName = 'bwul$oct';
 
-  // Get current bandwidth limit for a device
-  Future<Map<String, int>> getDeviceBandwidth(String mac) async {
-    try {
-      final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
-      final macUp = mac.toUpperCase();
-      for (final rule in current.trim().split('>').where((s) => s.isNotEmpty)) {
-        final parts = rule.split('<');
-        if (parts.isNotEmpty && parts[0].toUpperCase() == macUp) {
-          return {
-            'dl': int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0,
-            'ul': int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
-          };
-        }
-      }
-      return {'dl': 0, 'ul': 0};
-    } catch (_) { return {'dl': 0, 'ul': 0}; }
-  }
-
-    RouterStatus _parseStatus(String raw) {
-    try {
-      final sections = _parseSections(raw);
-
-      // CPU
-      double cpuPercent = 0;
-      final cpuLine = sections['CPU']?.firstOrNull ?? '';
-      final cpuParts = cpuLine.split(RegExp(r'\s+'));
-      if (cpuParts.length >= 5) {
-        final user   = int.tryParse(cpuParts[1]) ?? 0;
-        final nice   = int.tryParse(cpuParts[2]) ?? 0;
-        final system = int.tryParse(cpuParts[3]) ?? 0;
-        final idle   = int.tryParse(cpuParts[4]) ?? 0;
-        final total  = user + nice + system + idle;
-        if (total > 0) cpuPercent = (user + nice + system) / total * 100;
-      }
-
-      // RAM
-      final memMap = <String, int>{};
-      for (final line in sections['MEM'] ?? []) {
-        final parts = line.split(':');
-        if (parts.length == 2) {
-          final val = int.tryParse(parts[1].trim().split(' ')[0]) ?? 0;
-          memMap[parts[0].trim()] = val;
-        }
-      }
-      final memTotal = memMap['MemTotal'] ?? 0;
-      final memFree  = memMap['MemFree'] ?? 0;
-      final buffers  = memMap['Buffers'] ?? 0;
-      final cached   = memMap['Cached'] ?? 0;
-      final memUsed  = memTotal - memFree - buffers - cached;
-
-      // Uptime
-      String uptime = '-';
-      final uptimeLine = sections['UPTIME']?.firstOrNull ?? '';
-      final uptimeSecs = double.tryParse(uptimeLine.split(' ')[0]) ?? 0;
-      if (uptimeSecs > 0) {
-        final d = uptimeSecs ~/ 86400;
-        final h = (uptimeSecs % 86400) ~/ 3600;
-        final m = (uptimeSecs % 3600) ~/ 60;
-        uptime = d > 0 ? '${d}d ${h}h ${m}m' : '${h}h ${m}m';
-      }
-
-      // CPU Temp - try multiple sources and formats
-      double cpuTempC = 0;
-      final tempLines = sections['TEMP'] ?? [];
-      for (final tl in tempLines) {
-        // Strip prefix like "temperature: 52000" or "Temp: 52.0"
-        final cleaned = tl.replaceAll(RegExp(r'[a-zA-Z:=\s]+'), '').trim();
-        final tempVal = double.tryParse(cleaned) ?? 0;
-        if (tempVal > 1000) {
-          cpuTempC = tempVal / 1000; // millidegrees
-          break;
-        } else if (tempVal > 0) {
-          cpuTempC = tempVal; // already celsius
-          break;
-        }
-      }
-
-      final nvram = sections['NVRAM'] ?? [];
-      final ssid5  = nvram.length > 5 ? nvram[5].trim() : '';
-      final r24    = nvram.length > 6 ? nvram[6].trim() : '1';
-      final r5     = nvram.length > 7 ? nvram[7].trim() : '1';
-      final ch24   = nvram.length > 8 ? nvram[8].trim() : '';
-      final ch5    = nvram.length > 9 ? nvram[9].trim() : '';
-      final sec24  = nvram.length > 10 ? nvram[10].trim() : '';
-      final sec5   = nvram.length > 11 ? nvram[11].trim() : '';
-      final cry24  = nvram.length > 12 ? nvram[12].trim() : '';
-      final cry5   = nvram.length > 13 ? nvram[13].trim() : '';
-      return RouterStatus(
-        cpuPercent: cpuPercent.clamp(0, 100),
-        ramUsedMB: (memUsed / 1024).round(),
-        ramTotalMB: (memTotal / 1024).round(),
-        uptime: uptime,
-        wanIp: nvram.length > 0 ? nvram[0] : '-',
-        lanIp: nvram.length > 1 ? nvram[1] : '-',
-        wifiSsid: nvram.length > 2 ? nvram[2] : '-',
-        routerModel: nvram.length > 3 ? nvram[3] : 'FreshTomato',
-        firmware: nvram.length > 4 ? nvram[4] : '-',
-        wifiSsid5: ssid5,
-        wifi24enabled: r24 != '0',
-        wifi5enabled: r5 != '0',
-        wifi5present: ssid5.isNotEmpty,
-        isOnline: true,
-        cpuTempC: cpuTempC,
+      // Always remove existing rules first (clean slate)
+      await run(
+        'iptables -D FORWARD -d $deviceIp -m hashlimit --hashlimit-name $dlName '
+        '--hashlimit-above 1kb/s --hashlimit-mode dstip -j DROP 2>/dev/null; '
+        'iptables -D FORWARD -s $deviceIp -m hashlimit --hashlimit-name $ulName '
+        '--hashlimit-above 1kb/s --hashlimit-mode srcip -j DROP 2>/dev/null; '
+        'true'
       );
-    } catch (e) {
-      return RouterStatus.empty();
-    }
-  }
 
-  //  Devices 
-  Future<List<ConnectedDevice>> getDevices() async {
-    try {
-      final output = await run(r'''
-echo "=ARP="
-cat /proc/net/arp
-echo "=WL0="
-wl -i eth1 assoclist 2>/dev/null || wl assoclist 2>/dev/null || echo ""
-echo "=WL1="
-wl -i eth2 assoclist 2>/dev/null || echo ""
-echo "=LEASES="
-cat /var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/var/lib/misc/dnsmasq.leases 2>/dev/null || cat /tmp/dnsmasq.leases 2>/dev/null || echo ""
-echo "=NAMES="
-nvram get dhcp_static_leases 2>/dev/null || echo ""
-echo "=BLOCK="
-iptables -L FORWARD -n 2>/dev/null | grep "MAC" | awk '{print $NF}' | sed 's/MAC //' || echo ""
-''');
-      return _parseDevices(output);
-    } catch (e) {
-      debugPrint('getDevices error: $e');
-      return [];
-    }
-  }
-
-  List<ConnectedDevice> _parseDevices(String raw) {
-    final devices = <ConnectedDevice>[];
-    final sections = _parseSections(raw);
-
-    // Blocked MACs dari iptables
-    final blockedMacs = <String>{};
-    for (final line in sections['BLOCK'] ?? []) {
-      final m = RegExp(r'([0-9A-Fa-f:]{17})').firstMatch(line);
-      if (m != null) blockedMacs.add(m.group(1)!.toUpperCase());
-    }
-
-    // Wireless MACs
-    final wlMacs = <String>{};
-    for (final line in [...(sections['WL0'] ?? []), ...(sections['WL1'] ?? [])]) {
-      final m = RegExp(r'([0-9A-Fa-f:]{17})').firstMatch(line);
-      if (m != null) wlMacs.add(m.group(1)!.toUpperCase());
-    }
-
-    // dnsmasq.leases: "expiry MAC IP hostname clientid"
-    final hostnameMap = <String, String>{};
-    for (final line in sections['LEASES'] ?? []) {
-      final parts = line.trim().split(RegExp(r'\s+'));
-      if (parts.length >= 4) {
-        final mac = parts[1].toUpperCase();
-        final host = parts[3] == '*' ? '' : parts[3];
-        if (host.isNotEmpty) hostnameMap[mac] = host;
+      if (dlKbps > 0 || ulKbps > 0) {
+        final cmds = <String>[];
+        if (dlKbps > 0) {
+          cmds.add(
+            'iptables -I FORWARD -d $deviceIp -m hashlimit '
+            '--hashlimit-name $dlName '
+            '--hashlimit-above ${dlKbps}kb/s '
+            '--hashlimit-mode dstip '
+            '--hashlimit-burst ${(dlKbps * 2).clamp(64, 65536)} '
+            '-j DROP'
+          );
+        }
+        if (ulKbps > 0) {
+          cmds.add(
+            'iptables -I FORWARD -s $deviceIp -m hashlimit '
+            '--hashlimit-name $ulName '
+            '--hashlimit-above ${ulKbps}kb/s '
+            '--hashlimit-mode srcip '
+            '--hashlimit-burst ${(ulKbps * 2).clamp(64, 65536)} '
+            '-j DROP'
+          );
+        }
+        await run(cmds.join(' && '));
       }
-    }
 
-    // DHCP static leases untuk nama (format: MAC:IP:hostname:lease>...)
-    final nameMap = <String, String>{};
-    for (final entry in (sections['NAMES']?.firstOrNull ?? '').split('>')) {
-      final parts = entry.split(':');
-      if (parts.length >= 3) {
-        nameMap[parts[0].toUpperCase()] = parts[2];
-      }
-    }
-
-    // ARP table
-    for (final line in sections['ARP'] ?? []) {
-      if (line.startsWith('IP') || line.trim().isEmpty) continue;
-      final parts = line.split(RegExp(r'\s+'));
-      if (parts.length < 4) continue;
-      final ip  = parts[0];
-      final mac = parts[3].toUpperCase();
-      if (mac == '00:00:00:00:00:00' || mac.isEmpty || mac == '(INCOMPLETE)') continue;
-      final iface = parts.length > 5 ? parts[5] : 'br0';
-
-      devices.add(ConnectedDevice(
-        mac: mac, ip: ip,
-        name: nameMap[mac] ?? '',
-        hostname: hostnameMap[mac] ?? '',
-        interface: wlMacs.contains(mac) ? 'wl0' : iface,
-        rssi: '-',
-        isBlocked: blockedMacs.contains(mac),
-        lastSeen: DateTime.now(),
-      ));
-    }
-    return devices;
-  }
-
-  //  Bandwidth 
-  Future<Map<String, int>> getBandwidthRaw() async {
-    try {
-      final wan = (await run("nvram get wan_iface 2>/dev/null || echo 'vlan2'")).trim();
-      final wanIface = wan.isEmpty ? 'vlan2' : wan;
-      // Try WAN iface first, fallback to br0
-      final output = await run("cat /proc/net/dev | grep -E '$wanIface|br0' | head -1");
-      final line = output.split('\n').first;
-      final clean = line.replaceAll(RegExp(r'^[^:]+:'), '').trim();
-      final parts = clean.split(RegExp(r'\s+'));
-      if (parts.length >= 9) {
-        return {'rx': int.tryParse(parts[0]) ?? 0, 'tx': int.tryParse(parts[8]) ?? 0};
-      }
-      return {'rx': 0, 'tx': 0};
-    } catch (e) {
-      return {'rx': 0, 'tx': 0};
-    }
-  }
-
-  //  Block/Unblock 
-  Future<bool> blockDevice(String mac, bool block) async {
-    try {
-      final macLower = mac.toLowerCase();
-      if (block) {
-        // Add iptables rule - block both directions
-        await run('iptables -I FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null; '
-                  'iptables -I FORWARD -m mac --mac-source ${mac.toUpperCase()} -j DROP 2>/dev/null');
-        debugPrint('Blocked $mac');
-      } else {
-        // Remove all rules for this MAC
-        await run('iptables -D FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null; '
-                  'iptables -D FORWARD -m mac --mac-source ${mac.toUpperCase()} -j DROP 2>/dev/null; '
-                  'iptables -D FORWARD -m mac --mac-source $macLower -j DROP 2>/dev/null');
-        debugPrint('Unblocked $mac');
-      }
+      // Persist to nvram
+      final key = 'bwl_${deviceIp.replaceAll('.', '_')}';
+      run('nvram set ${key}_d=$dlKbps && nvram set ${key}_u=$ulKbps && nvram commit')
+        .catchError((_) {});
       return true;
     } catch (e) {
-      debugPrint('blockDevice error: $e');
+      debugPrint('setDeviceBandwidth error: \$e');
       return false;
     }
   }
 
-  //  Reboot 
-  Future<bool> reboot() async {
-    try { await run('reboot'); return true; } catch (_) { return false; }
-  }
-
-  //  Logs 
-  Future<List<LogEntry>> getLogs() async {
+  Future<Map<String, int>> getDeviceBandwidth(String deviceIp) async {
     try {
-      // FreshTomato stores logs in /var/log/messages or via logread
-      final output = await runWithStderr(
-        'logread 2>/dev/null || cat /var/log/messages 2>/dev/null || dmesg 2>/dev/null | tail -100'
-      );
-      if (output.trim().isEmpty) return [];
-      return _parseLogs(output);
-    } catch (e) {
-      debugPrint('getLogs error: $e');
-      return [];
-    }
+      final key = 'bwl_${deviceIp.replaceAll('.', '_')}';
+      final dl = (await run('nvram get ${key}_d 2>/dev/null || echo 0')).trim();
+      final ul = (await run('nvram get ${key}_u 2>/dev/null || echo 0')).trim();
+      return {
+        'dl': int.tryParse(dl.isEmpty || dl == 'null' ? '0' : dl) ?? 0,
+        'ul': int.tryParse(ul.isEmpty || ul == 'null' ? '0' : ul) ?? 0,
+      };
+    } catch (_) { return {'dl': 0, 'ul': 0}; }
   }
 
-  List<LogEntry> _parseLogs(String raw) {
-    final entries = <LogEntry>[];
-    for (final line in raw.split('\n')) {
-      if (line.trim().isEmpty) continue;
-      // Format 1: "Jan  1 00:00:00 hostname daemon.info process: message"
-      final match1 = RegExp(
-        r'^(\w+ +\d+ \d+:\d+:\d+) \S+ (\S+)\.(\S+) ([^:]+): (.*)'
-      ).firstMatch(line);
-      if (match1 != null) {
-        entries.add(LogEntry(
-          time: _tryParseTime(match1.group(1) ?? ''),
-          process: match1.group(4) ?? '-',
-          level: match1.group(3) ?? 'info',
-          message: match1.group(5) ?? line,
-        ));
-        continue;
-      }
-      // Format 2: dmesg "[   0.000000] message"
-      final match2 = RegExp(r'^\[\s*[\d.]+\] (.*)').firstMatch(line);
-      if (match2 != null) {
-        entries.add(LogEntry(
-          time: DateTime.now(),
-          process: 'kernel',
-          level: 'info',
-          message: match2.group(1) ?? line,
-        ));
-        continue;
-      }
-      // Fallback
-      entries.add(LogEntry(
-        time: DateTime.now(), process: '-', level: 'info', message: line,
-      ));
-    }
-    return entries; // sudah urut dari atas ke bawah (log lama di atas, baru di bawah)
-  }
-
-  DateTime _tryParseTime(String s) {
-    try {
-      final now = DateTime.now();
-      // "Mar  7 11:13:40"  parse with current year
-      final parts = s.trim().split(RegExp(r'\s+'));
-      if (parts.length >= 3) {
-        final months = {'Jan':1,'Feb':2,'Mar':3,'Apr':4,'May':5,'Jun':6,
-                        'Jul':7,'Aug':8,'Sep':9,'Oct':10,'Nov':11,'Dec':12};
-        final month = months[parts[0]] ?? 1;
-        final day   = int.tryParse(parts[1]) ?? 1;
-        final time  = parts[2].split(':');
-        return DateTime(now.year, month, day,
-          int.tryParse(time[0]) ?? 0,
-          int.tryParse(time[1]) ?? 0,
-          int.tryParse(time[2]) ?? 0,
-        );
-      }
-    } catch (_) {}
-    return DateTime.now();
-  }
-
-  //  QoS 
-  // QoS per-device bandwidth rules - main QoS is in bandwidth_screen
-  Future<List<QosRule>> getQosRules() async {
-    try {
-      final output = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
-      if (output.trim().isEmpty) return [];
-      return output.trim().split('>').where((s) => s.isNotEmpty).map((s) {
-        final parts = s.split('<');
-        return QosRule(
-          id: parts.isNotEmpty ? parts[0] : DateTime.now().millisecondsSinceEpoch.toString(),
-          mac: parts.isNotEmpty ? parts[0] : '',
-          downloadKbps: int.tryParse(parts.length > 1 ? parts[1] : '0') ?? 0,
-          uploadKbps: int.tryParse(parts.length > 2 ? parts[2] : '0') ?? 0,
-          name: parts.length > 3 ? parts[3] : 'Device',
-          enabled: true,
-        );
-      }).toList();
-    } catch (e) { return []; }
-  }
-
-  Future<bool> saveQosRule(QosRule rule) async {
-    try {
-      final current = await run('nvram get qos_bwrates 2>/dev/null || echo ""');
-      final rules = current.trim().isEmpty ? <String>[] : current.trim().split('>');
-      final newRule = '${rule.mac}<${rule.downloadKbps}<${rule.uploadKbps}<${rule.name}';
-      final idx = rules.indexWhere((r) => r.startsWith('${rule.mac}<'));
-      if (idx >= 0) rules[idx] = newRule; else rules.add(newRule);
-      await run("nvram set qos_bwrates='${rules.join('>')}' && nvram commit");
-      return true;
-    } catch (_) { return false; }
-  }
-
-
-  //  Port Forward 
-  Future<List<PortForwardRule>> getPortForwardRules() async {
-    try {
-      final output = await run('nvram get portforward 2>/dev/null || echo ""');
-      if (output.trim().isEmpty) return [];
-      // FreshTomato format: enabled<proto<src_ip<ext_port<int_port<int_ip<desc
-      // enabled: 0=disabled, 1=enabled; proto: 1=tcp, 2=udp, 3=both
-      final rules = <PortForwardRule>[];
-      int i = 0;
-      for (final s in output.trim().split('>').where((s) => s.isNotEmpty)) {
-        final parts = s.split('<');
-        if (parts.length < 5) continue;
-        final enabled  = parts[0].trim() != '0';
-        final protoNum = parts[1].trim();
-        final proto    = protoNum == '2' ? 'udp' : protoNum == '3' ? 'both' : 'tcp';
-        // parts[2] = src_ip restriction (often empty)
-        final extPort  = parts.length > 3 ? parts[3].trim() : '';
-        final intPort  = parts.length > 4 ? parts[4].trim() : '';
-        final intIp    = parts.length > 5 ? parts[5].trim() : '';
-        final desc     = parts.length > 6 ? parts[6].trim() : '';
-        if (extPort.isEmpty && intIp.isEmpty) continue;
-        rules.add(PortForwardRule(
-          id: 'pf_${i++}',
-          name: desc.isNotEmpty ? desc : 'Rule ${i}',
-          protocol: proto,
-          externalPort: int.tryParse(extPort.split(':').first.split(',').first) ?? 0,
-          internalPort: int.tryParse(intPort.split(':').first.split(',').first) ?? 0,
-          internalIp: intIp,
-          enabled: enabled,
-        ));
-      }
-      return rules;
-    } catch (e) { return []; }
-  }
-
-  Future<bool> savePortForwardRules(List<PortForwardRule> rules) async {
-    try {
-      // FreshTomato format: enabled<proto<src_ip<ext_port<int_port<int_ip<desc
-      final data = rules.map((r) {
-        final protoNum = r.protocol == 'udp' ? '2' : r.protocol == 'both' ? '3' : '1';
-        final en = r.enabled ? '1' : '0';
-        return '$en<$protoNum<<${r.externalPort}<${r.internalPort}<${r.internalIp}<${r.name}';
-      }).join('>');
-      await run("nvram set portforward='$data' && nvram commit");
-      run('(service firewall restart > /dev/null 2>&1 &)').catchError((_){});
-      return true;
-    } catch (_) { return false; }
-  }
 
 
   //  Helpers 
