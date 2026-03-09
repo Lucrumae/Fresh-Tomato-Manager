@@ -483,26 +483,23 @@ class SshService {
         'echo "=ARP="; '
         'cat /proc/net/arp 2>/dev/null; '
         'echo "=LEASES="; '
-        'cat /tmp/dnsmasq.leases 2>/dev/null || cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true; '
-        'echo "=RSSI="; '
-        'for iface in eth1 eth2; do '
-        '  wl -i \$iface assoclist 2>/dev/null | awk "{print \$2}" | while read mac; do '
-        '    rssi=\$(wl -i \$iface rssi \$mac 2>/dev/null | awk "{print \$NF}"); '
-        '    echo "\$iface \$mac \$rssi"; '
-        '  done; '
-        'done 2>/dev/null || true'
+        'cat /tmp/dnsmasq.leases 2>/dev/null || '
+        'cat /tmp/var/lib/misc/dnsmasq.leases 2>/dev/null || '
+        'cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true; '
+        'echo "=WIFI="; '
+        'wl -i eth1 assoclist 2>/dev/null | awk \'{print "eth1 " \$2}\'; '
+        'wl -i eth2 assoclist 2>/dev/null | awk \'{print "eth2 " \$2}\''
       );
 
       // Parse leases: IP -> hostname
       final leaseNames = <String, String>{};
-      // Parse RSSI: MAC -> rssi string, MAC -> iface
-      final rssiMap   = <String, String>{};
-      final ifaceMap  = <String, String>{};
+      // WiFi MACs (lowercase) -> iface
+      final wifiMacs = <String, String>{}; // mac -> iface
 
       String section = '';
       for (final line in raw.split('\n')) {
         final t = line.trim();
-        if (t == '=ARP=' || t == '=LEASES=' || t == '=RSSI=') { section = t; continue; }
+        if (t == '=ARP=' || t == '=LEASES=' || t == '=WIFI=') { section = t; continue; }
         if (t.isEmpty) continue;
 
         if (section == '=LEASES=') {
@@ -513,14 +510,11 @@ class SshService {
             final name = parts[3] == '*' ? '' : parts[3];
             leaseNames[ip] = name;
           }
-        } else if (section == '=RSSI=') {
+        } else if (section == '=WIFI=') {
+          // format: "eth1 AA:BB:CC:DD:EE:FF"
           final parts = t.split(RegExp(r'\s+'));
-          if (parts.length >= 3) {
-            final iface = parts[0];
-            final mac   = parts[1].toLowerCase();
-            final rssi  = parts[2];
-            rssiMap[mac]  = rssi;
-            ifaceMap[mac] = iface;
+          if (parts.length >= 2) {
+            wifiMacs[parts[1].toLowerCase()] = parts[0]; // uppercase from wl -> lowercase key
           }
         }
       }
@@ -531,29 +525,30 @@ class SshService {
       section = '';
       for (final line in raw.split('\n')) {
         final t = line.trim();
-        if (t == '=ARP=' || t == '=LEASES=' || t == '=RSSI=') { section = t; continue; }
+        if (t == '=ARP=' || t == '=LEASES=' || t == '=WIFI=') { section = t; continue; }
         if (section != '=ARP=') continue;
         if (t.isEmpty || t.startsWith('IP')) continue;
 
         final parts = t.split(RegExp(r'\s+'));
         if (parts.length < 6) continue;
         final ip    = parts[0];
-        final flags = parts[2]; // 0x0 = incomplete, skip
+        final flags = parts[2];
         final mac   = parts[3].toLowerCase();
         if (mac == '00:00:00:00:00:00' || mac.length != 17) continue;
-        if (flags == '0x0') continue; // stale/incomplete ARP entry
+        if (flags == '0x0') continue;
         if (seenMacs.contains(mac)) continue;
         seenMacs.add(mac);
 
+        // Determine interface: wifi MACs take priority, fallback to ARP device column
+        final iface = wifiMacs[mac] ?? (parts.length > 5 ? parts[5] : '');
         final name  = leaseNames[ip] ?? '';
-        final iface = ifaceMap[mac] ?? (parts.length > 5 ? parts[5] : '');
         devices.add(ConnectedDevice(
           ip:        ip,
           mac:       mac,
           name:      name.isNotEmpty ? name : ip,
           hostname:  name,
           interface: iface,
-          rssi:      rssiMap[mac] ?? '',
+          rssi:      '',
           isBlocked: false,
           lastSeen:  DateTime.now(),
         ));
@@ -590,59 +585,73 @@ class SshService {
   Future<List<LogEntry>> getLogs() async {
     try {
       final raw = await run(
-        'logread 2>/dev/null | tail -300 || '
         'cat /var/log/messages 2>/dev/null | tail -300 || '
+        'logread 2>/dev/null | tail -300 || '
         'dmesg 2>/dev/null | tail -100 || echo ""'
       );
       if (raw.trim().isEmpty) return [];
 
       final entries = <LogEntry>[];
-      // logread format: "Mon Jan  1 00:00:00 2024 hostname process[pid]: message"
-      // syslog format:  "Jan  1 00:00:00 hostname process[pid]: message"
-      final logreadRe = RegExp(
-        r'^(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
-      );
+      // BusyBox syslog format: "Jan  1 07:00:03 unknown kern.notice kernel: message"
+      // Fields: month day time hostname facility.level process: message
       final syslogRe = RegExp(
+        r'^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+(\S+?)\.(\w+)\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
+      );
+      // Fallback simple syslog: "Jan  1 07:00:03 hostname process: message"
+      final simpleSyslogRe = RegExp(
         r'^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
       );
-      final kernelRe = RegExp(r'^\[\s*[\d.]+\]\s*(.*)$');
 
       for (final line in raw.split('\n')) {
         final t = line.trim();
         if (t.isEmpty) continue;
 
-        String timeStr = '', process = '', message = t;
+        String timeStr = '', process = '', levelStr = '', message = t;
 
-        final m1 = logreadRe.firstMatch(t);
-        final m2 = m1 == null ? syslogRe.firstMatch(t) : null;
-        final m3 = (m1 == null && m2 == null) ? kernelRe.firstMatch(t) : null;
+        final m1 = syslogRe.firstMatch(t);
+        final m2 = m1 == null ? simpleSyslogRe.firstMatch(t) : null;
 
         if (m1 != null) {
-          timeStr = m1.group(1) ?? '';
-          process = m1.group(2) ?? '';
-          message = m1.group(3) ?? t;
+          timeStr  = m1.group(1) ?? '';
+          levelStr = m1.group(3) ?? ''; // notice, warn, err, debug, info, crit
+          process  = m1.group(4) ?? '';
+          message  = m1.group(5) ?? t;
         } else if (m2 != null) {
           timeStr = m2.group(1) ?? '';
           process = m2.group(2) ?? '';
           message = m2.group(3) ?? t;
-        } else if (m3 != null) {
-          process = 'kernel';
-          message = m3.group(1) ?? t;
         }
 
-        final lower = message.toLowerCase();
+        // Map syslog severity to our levels
         String level = 'info';
-        if (lower.contains('error') || lower.contains('err:') ||
-            lower.contains('fail') || lower.contains('crit') ||
-            lower.contains('alert') || lower.contains('emerg')) {
+        final lev = levelStr.toLowerCase();
+        if (lev == 'err' || lev == 'error' || lev == 'crit' ||
+            lev == 'alert' || lev == 'emerg') {
           level = 'err';
-        } else if (lower.contains('warn') || lower.contains('warning')) {
+        } else if (lev == 'warn' || lev == 'warning') {
           level = 'warn';
+        } else if (lev == 'debug') {
+          level = 'debug';
+        }
+
+        // Fallback: scan message text if no level from format
+        if (levelStr.isEmpty) {
+          final lower = message.toLowerCase();
+          if (lower.contains('error') || lower.contains('fail') ||
+              lower.contains('crit')) {
+            level = 'err';
+          } else if (lower.contains('warn')) {
+            level = 'warn';
+          }
         }
 
         DateTime time = DateTime.now();
         if (timeStr.isNotEmpty) {
-          try { time = DateTime.parse(timeStr); } catch (_) {}
+          try {
+            // BusyBox uses current year implicitly; add year for parsing
+            final withYear = '${timeStr.replaceAll(RegExp(r'\s+'), ' ')} ${DateTime.now().year}';
+            time = DateTime.parse(withYear) ;
+          } catch (_) {}
         }
 
         entries.add(LogEntry(
