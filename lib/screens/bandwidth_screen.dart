@@ -11,10 +11,11 @@ import '../models/models.dart';
 // Traffic tick - increments to trigger realtime refresh
 final _trafficTickProvider = StateProvider<int>((ref) => 0);
 
-// Realtime traffic: reads cumulative /proc/net/dev bytes + historical traff- keys
-// Refreshes every 3s (same cadence as bandwidth chart)
+// History tick refreshes every 60s (not 1s — getTrafficHistory is slow)
+final _historyTickProvider = StateProvider<int>((ref) => 0);
+
 final trafficHistoryProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  ref.watch(_trafficTickProvider);
+  ref.watch(_historyTickProvider);
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   return ssh.getTrafficHistory();
@@ -251,20 +252,24 @@ class BandwidthScreen extends ConsumerStatefulWidget {
 class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
   bool _showQos = false;
   Timer? _trafficTimer;
+  Timer? _historyTimer;
 
   @override
   void initState() {
     super.initState();
-    // Refresh traffic history every 3s for realtime cumulative display
-    // /proc/net/dev counters update immediately, so 3s gives smooth updates
     _trafficTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) ref.read(_trafficTickProvider.notifier).state++;
+    });
+    // History (nvram traff- keys) only needs refresh every 60s
+    _historyTimer = Timer.periodic(const Duration(seconds: 60), (_) {
+      if (mounted) ref.read(_historyTickProvider.notifier).state++;
     });
   }
 
   @override
   void dispose() {
     _trafficTimer?.cancel();
+    _historyTimer?.cancel();
     super.dispose();
   }
 

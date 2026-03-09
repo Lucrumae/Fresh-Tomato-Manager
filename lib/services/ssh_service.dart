@@ -480,47 +480,80 @@ class SshService {
   Future<List<ConnectedDevice>> getDevices() async {
     try {
       final raw = await run(
+        'echo "=ARP="; '
         'cat /proc/net/arp 2>/dev/null; '
         'echo "=LEASES="; '
-        'cat /tmp/dnsmasq.leases 2>/dev/null || cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true'
+        'cat /tmp/dnsmasq.leases 2>/dev/null || cat /var/lib/misc/dnsmasq.leases 2>/dev/null || true; '
+        'echo "=RSSI="; '
+        'for iface in eth1 eth2; do '
+        '  wl -i \$iface assoclist 2>/dev/null | awk "{print \$2}" | while read mac; do '
+        '    rssi=\$(wl -i \$iface rssi \$mac 2>/dev/null | awk "{print \$NF}"); '
+        '    echo "\$iface \$mac \$rssi"; '
+        '  done; '
+        'done 2>/dev/null || true'
       );
 
+      // Parse leases: IP -> hostname
       final leaseNames = <String, String>{};
-      bool inLeases = false;
+      // Parse RSSI: MAC -> rssi string, MAC -> iface
+      final rssiMap   = <String, String>{};
+      final ifaceMap  = <String, String>{};
+
+      String section = '';
       for (final line in raw.split('\n')) {
         final t = line.trim();
-        if (t == '=LEASES=') { inLeases = true; continue; }
-        if (inLeases && t.isNotEmpty) {
+        if (t == '=ARP=' || t == '=LEASES=' || t == '=RSSI=') { section = t; continue; }
+        if (t.isEmpty) continue;
+
+        if (section == '=LEASES=') {
           // format: expiry MAC IP hostname client-id
           final parts = t.split(RegExp(r'\s+'));
           if (parts.length >= 4) {
-            leaseNames[parts[2]] = parts[3] == '*' ? '' : parts[3];
+            final ip   = parts[2];
+            final name = parts[3] == '*' ? '' : parts[3];
+            leaseNames[ip] = name;
+          }
+        } else if (section == '=RSSI=') {
+          final parts = t.split(RegExp(r'\s+'));
+          if (parts.length >= 3) {
+            final iface = parts[0];
+            final mac   = parts[1].toLowerCase();
+            final rssi  = parts[2];
+            rssiMap[mac]  = rssi;
+            ifaceMap[mac] = iface;
           }
         }
       }
 
-      final devices = <ConnectedDevice>[];
+      // Parse ARP table
+      final devices  = <ConnectedDevice>[];
       final seenMacs = <String>{};
+      section = '';
       for (final line in raw.split('\n')) {
         final t = line.trim();
-        if (t.isEmpty || t.startsWith('IP') || t.startsWith('=')) continue;
-        if (inLeases) break;
+        if (t == '=ARP=' || t == '=LEASES=' || t == '=RSSI=') { section = t; continue; }
+        if (section != '=ARP=') continue;
+        if (t.isEmpty || t.startsWith('IP')) continue;
+
         final parts = t.split(RegExp(r'\s+'));
         if (parts.length < 6) continue;
-        final ip  = parts[0];
-        final mac = parts[3].toLowerCase();
+        final ip    = parts[0];
+        final flags = parts[2]; // 0x0 = incomplete, skip
+        final mac   = parts[3].toLowerCase();
         if (mac == '00:00:00:00:00:00' || mac.length != 17) continue;
+        if (flags == '0x0') continue; // stale/incomplete ARP entry
         if (seenMacs.contains(mac)) continue;
         seenMacs.add(mac);
-        final name = leaseNames[ip] ?? '';
-        final iface = parts.length > 5 ? parts[5] : '';
+
+        final name  = leaseNames[ip] ?? '';
+        final iface = ifaceMap[mac] ?? (parts.length > 5 ? parts[5] : '');
         devices.add(ConnectedDevice(
           ip:        ip,
           mac:       mac,
           name:      name.isNotEmpty ? name : ip,
           hostname:  name,
           interface: iface,
-          rssi:      '',
+          rssi:      rssiMap[mac] ?? '',
           isBlocked: false,
           lastSeen:  DateTime.now(),
         ));
@@ -557,21 +590,66 @@ class SshService {
   Future<List<LogEntry>> getLogs() async {
     try {
       final raw = await run(
-        'logread 2>/dev/null | tail -200 || '
-        'cat /var/log/messages 2>/dev/null | tail -200 || '
+        'logread 2>/dev/null | tail -300 || '
+        'cat /var/log/messages 2>/dev/null | tail -300 || '
         'dmesg 2>/dev/null | tail -100 || echo ""'
       );
       if (raw.trim().isEmpty) return [];
+
       final entries = <LogEntry>[];
+      // logread format: "Mon Jan  1 00:00:00 2024 hostname process[pid]: message"
+      // syslog format:  "Jan  1 00:00:00 hostname process[pid]: message"
+      final logreadRe = RegExp(
+        r'^(\w{3}\s+\w{3}\s+\d+\s+\d+:\d+:\d+\s+\d{4})\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
+      );
+      final syslogRe = RegExp(
+        r'^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
+      );
+      final kernelRe = RegExp(r'^\[\s*[\d.]+\]\s*(.*)$');
+
       for (final line in raw.split('\n')) {
         final t = line.trim();
         if (t.isEmpty) continue;
+
+        String timeStr = '', process = '', message = t;
+
+        final m1 = logreadRe.firstMatch(t);
+        final m2 = m1 == null ? syslogRe.firstMatch(t) : null;
+        final m3 = (m1 == null && m2 == null) ? kernelRe.firstMatch(t) : null;
+
+        if (m1 != null) {
+          timeStr = m1.group(1) ?? '';
+          process = m1.group(2) ?? '';
+          message = m1.group(3) ?? t;
+        } else if (m2 != null) {
+          timeStr = m2.group(1) ?? '';
+          process = m2.group(2) ?? '';
+          message = m2.group(3) ?? t;
+        } else if (m3 != null) {
+          process = 'kernel';
+          message = m3.group(1) ?? t;
+        }
+
+        final lower = message.toLowerCase();
+        String level = 'info';
+        if (lower.contains('error') || lower.contains('err:') ||
+            lower.contains('fail') || lower.contains('crit') ||
+            lower.contains('alert') || lower.contains('emerg')) {
+          level = 'err';
+        } else if (lower.contains('warn') || lower.contains('warning')) {
+          level = 'warn';
+        }
+
+        DateTime time = DateTime.now();
+        if (timeStr.isNotEmpty) {
+          try { time = DateTime.parse(timeStr); } catch (_) {}
+        }
+
         entries.add(LogEntry(
-          time:    DateTime.now(),
-          process: '',
-          level:   t.toLowerCase().contains('err') || t.toLowerCase().contains('fail')
-                   ? 'err' : t.toLowerCase().contains('warn') ? 'warn' : 'info',
-          message: t,
+          time:    time,
+          process: process,
+          level:   level,
+          message: message,
         ));
       }
       return entries.reversed.toList();
