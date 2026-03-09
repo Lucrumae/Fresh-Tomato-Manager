@@ -93,7 +93,7 @@ class SshService {
   //  Router Status 
   Future<RouterStatus> getStatus() async {
     try {
-      final output = await run('''
+      final output = await run(\'\'\'
 echo "=CPU="
 cat /proc/stat | head -1
 echo "=MEM="
@@ -120,10 +120,103 @@ nvram get wl0_security_mode
 nvram get wl1_security_mode
 nvram get wl0_crypto
 nvram get wl1_crypto
-''');
+nvram get wan_iface
+\'\'\');
       return _parseStatus(output);
     } catch (e) {
       debugPrint('getStatus error: $e');
+      return RouterStatus.empty();
+    }
+  }
+
+  RouterStatus _parseStatus(String raw) {
+    try {
+      final sections = _parseSections(raw);
+      final cpu   = sections['CPU']    ?? [];
+      final mem   = sections['MEM']    ?? [];
+      final upt   = sections['UPTIME'] ?? [];
+      final tmp   = sections['TEMP']   ?? [];
+      final nvram = sections['NVRAM']  ?? [];
+
+      // CPU %
+      double cpuPct = 0;
+      if (cpu.isNotEmpty) {
+        final parts = cpu[0].split(RegExp(r'\s+'));
+        final jiffies = parts.skip(1).take(8)
+            .map((s) => int.tryParse(s) ?? 0).toList();
+        if (_prevCpuJiffies.length == jiffies.length) {
+          final deltas = List.generate(jiffies.length,
+              (i) => (jiffies[i] - _prevCpuJiffies[i]).clamp(0, 999999));
+          final idle  = deltas[3] + (deltas.length > 4 ? deltas[4] : 0);
+          final total = deltas.fold(0, (a, b) => a + b);
+          if (total > 0) cpuPct = (1 - idle / total) * 100;
+        }
+        _prevCpuJiffies = jiffies;
+      }
+
+      // RAM
+      int memTotal = 0, memFree = 0, memBuf = 0, memCached = 0;
+      for (final line in mem) {
+        final p = line.split(RegExp(r'\s+'));
+        final v = int.tryParse(p.length > 1 ? p[1] : '0') ?? 0;
+        if (line.startsWith('MemTotal'))  memTotal  = v;
+        if (line.startsWith('MemFree'))   memFree   = v;
+        if (line.startsWith('Buffers'))   memBuf    = v;
+        if (line.startsWith('Cached') && !line.startsWith('SwapCached')) memCached = v;
+      }
+      final memUsed = (memTotal - memFree - memBuf - memCached).clamp(0, memTotal);
+
+      // Uptime
+      String uptimeStr = '-';
+      if (upt.isNotEmpty) {
+        final secs = double.tryParse(upt[0].split(' ').first) ?? 0;
+        final d = (secs ~/ 86400);
+        final h = (secs ~/ 3600) % 24;
+        final m = (secs ~/ 60) % 60;
+        uptimeStr = d > 0 ? '${d}d ${h}h ${m}m' : h > 0 ? '${h}h ${m}m' : '${m}m';
+      }
+
+      // Temp
+      double cpuTemp = 0;
+      if (tmp.isNotEmpty) {
+        final tv = double.tryParse(
+            tmp[0].split('\n').first.replaceAll(RegExp(r'[^0-9.]'), '').trim()) ?? 0;
+        cpuTemp = tv > 1000 ? tv / 1000 : tv;
+      }
+
+      // NVRAM lines (positional — must match nvram get order above)
+      String get(int i) => (i < nvram.length ? nvram[i] : '').trim();
+      final wanIp    = get(0);
+      final lanIp    = get(1);
+      final ssid24   = get(2);
+      final model    = get(3);
+      final fw       = get(4);
+      final ssid5    = get(5);
+      final wl0on    = get(6) == '1';
+      final wl1on    = get(7) == '1';
+      final wanIface = get(14); // wan_iface (15th nvram get)
+      final wifi5p   = ssid5.isNotEmpty && ssid5 != 'null';
+
+      return RouterStatus(
+        cpuPercent:    cpuPct.clamp(0.0, 100.0),
+        ramUsedMB:     (memUsed / 1024).round(),
+        ramTotalMB:    (memTotal / 1024).round(),
+        uptime:        uptimeStr,
+        wanIp:         wanIp.isEmpty ? '-' : wanIp,
+        lanIp:         lanIp.isEmpty ? '-' : lanIp,
+        wifiSsid:      ssid24,
+        wifiSsid5:     ssid5,
+        wifi24enabled: wl0on,
+        wifi5enabled:  wl1on,
+        wifi5present:  wifi5p,
+        routerModel:   model.isEmpty ? 'Unknown' : model,
+        firmware:      fw.isEmpty ? '-' : fw,
+        isOnline:      true,
+        cpuTempC:      cpuTemp,
+        wanIface:      wanIface.isEmpty ? 'eth0' : wanIface,
+      );
+    } catch (e) {
+      debugPrint('_parseStatus error: $e');
       return RouterStatus.empty();
     }
   }
@@ -202,26 +295,82 @@ nvram get wl1_crypto
     } catch (_) { return current; }
   }
 
-  //  Raw bandwidth bytes from /proc/net/dev (WAN = usb0)
-  //  Used by bandwidthProvider for realtime chart polling
+  //  Universal bandwidth bytes from /proc/net/dev
+  //  Detects WAN interface from nvram wan_iface, then sums rx/tx bytes.
+  //  Falls back through: wan_iface → eth0 → first active non-loopback iface.
+  //  Used by bandwidthProvider for realtime 1-second polling.
+  //
+  //  Skip interfaces that are:
+  //    lo, ifb*, sit*, gre*, tun*, tap*, dummy*  (virtual/tunnel)
+  //    br0 (LAN bridge — would double-count)
+  //  Include: usb*, eth*, vlan*, ppp*, wwan*, rmnet*  (real WAN candidates)
+  static const _skipIfaces = ['lo', 'br0', 'ifb', 'sit', 'gre', 'tun', 'tap', 'dummy'];
+  static const _wanCandidates = ['usb', 'eth', 'vlan', 'ppp', 'wwan', 'rmnet', 'wan'];
+
   Future<Map<String, int>> getBandwidthRaw() async {
     try {
-      // usb0 is the WAN interface (USB tethering)
-      // /proc/net/dev columns: face|rx_bytes rx_pkts ... |tx_bytes tx_pkts...
-      final raw = await run('cat /proc/net/dev');
-      for (final line in raw.split('\n')) {
-        final trimmed = line.trim();
-        if (!trimmed.startsWith('usb0:')) continue;
-        // Format: "usb0: rx_bytes rx_pkts rx_err rx_drop ... tx_bytes ..."
-        final parts = trimmed.replaceFirst('usb0:', '').trim().split(RegExp(r'\s+'));
+      // Read wan_iface from nvram (cached after first getStatus call)
+      // and /proc/net/dev in one SSH call
+      final raw = await run(
+        'echo "=IFACE=\$(nvram get wan_iface 2>/dev/null || echo "")"; '
+        'cat /proc/net/dev'
+      );
+
+      final lines = raw.split('\n');
+      // First line: "=IFACE=usb0"
+      String wanIface = '';
+      for (final l in lines) {
+        if (l.startsWith('=IFACE=')) {
+          wanIface = l.substring(7).trim();
+          break;
+        }
+      }
+
+      // Parse /proc/net/dev into map: iface -> {rx, tx}
+      final ifaceBytes = <String, Map<String, int>>{};
+      for (final line in lines) {
+        final t = line.trim();
+        if (!t.contains(':')) continue;
+        final colonIdx = t.indexOf(':');
+        final name = t.substring(0, colonIdx).trim();
+        if (name.isEmpty || name == 'face') continue;
+        final parts = t.substring(colonIdx + 1).trim().split(RegExp(r'\s+'));
         if (parts.length >= 9) {
-          return {
-            'rx': int.tryParse(parts[0]) ?? 0,  // rx_bytes
-            'tx': int.tryParse(parts[8]) ?? 0,  // tx_bytes
+          ifaceBytes[name] = {
+            'rx': int.tryParse(parts[0]) ?? 0,
+            'tx': int.tryParse(parts[8]) ?? 0,
           };
         }
       }
-      return {'rx': 0, 'tx': 0};
+
+      // 1. Try the explicitly configured WAN interface first
+      if (wanIface.isNotEmpty && ifaceBytes.containsKey(wanIface)) {
+        return ifaceBytes[wanIface]!;
+      }
+
+      // 2. Try known WAN candidates in order of traffic (highest bytes first)
+      //    Skip loopback, bridges, and virtual interfaces
+      final candidates = ifaceBytes.entries.where((e) {
+        final n = e.key;
+        if (_skipIfaces.any((skip) => n.startsWith(skip))) return false;
+        return _wanCandidates.any((cand) => n.startsWith(cand));
+      }).toList()
+        ..sort((a, b) =>
+          (b.value['rx']! + b.value['tx']!).compareTo(
+          (a.value['rx']! + a.value['tx']!)));
+
+      if (candidates.isNotEmpty) return candidates.first.value;
+
+      // 3. Fallback: any non-loopback interface with traffic
+      final anyActive = ifaceBytes.entries.where((e) =>
+        e.key != 'lo' && !e.key.startsWith('ifb') &&
+        (e.value['rx']! + e.value['tx']!) > 0
+      ).toList()
+        ..sort((a, b) =>
+          (b.value['rx']! + b.value['tx']!).compareTo(
+          (a.value['rx']! + a.value['tx']!)));
+
+      return anyActive.isNotEmpty ? anyActive.first.value : {'rx': 0, 'tx': 0};
     } catch (_) { return {'rx': 0, 'tx': 0}; }
   }
 
@@ -277,13 +426,22 @@ nvram get wl1_crypto
             monthData[key] = val;
           }
         } else if (section == '=DEV=') {
-          // Only accumulate usb0 (WAN) bytes
-          if (!t.startsWith('usb0:')) continue;
-          final clean = t.replaceFirst(RegExp(r'^usb0:'), '').trim();
-          final parts = clean.split(RegExp(r'\s+'));
+          // Universal: find the interface with highest traffic (= WAN)
+          // Skip loopback, LAN bridge, and virtual interfaces
+          if (!t.contains(':')) continue;
+          final ci = t.indexOf(':');
+          final n  = t.substring(0, ci).trim();
+          if (n.isEmpty || n == 'lo' || n == 'br0' ||
+              n.startsWith('ifb') || n.startsWith('sit') ||
+              n.startsWith('tun') || n.startsWith('tap')) continue;
+          final parts = t.substring(ci + 1).trim().split(RegExp(r'\s+'));
           if (parts.length >= 9) {
-            devRxBytes = int.tryParse(parts[0]) ?? 0;  // rx_bytes
-            devTxBytes = int.tryParse(parts[8]) ?? 0;  // tx_bytes
+            final rx = int.tryParse(parts[0]) ?? 0;
+            final tx = int.tryParse(parts[8]) ?? 0;
+            if (rx + tx > devRxBytes + devTxBytes) {
+              devRxBytes = rx;
+              devTxBytes = tx;
+            }
           }
         }
       }

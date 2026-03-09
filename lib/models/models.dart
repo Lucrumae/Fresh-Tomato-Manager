@@ -15,6 +15,7 @@ class RouterStatus {
   final bool wifi5present;
   final double cpuTempC;
   final bool isOnline;
+  final String wanIface;
 
   RouterStatus({
     required this.cpuPercent, required this.ramUsedMB, required this.ramTotalMB,
@@ -26,6 +27,7 @@ class RouterStatus {
     this.wifi5enabled = true,
     this.wifi5present = false,
     this.cpuTempC = 0,
+    this.wanIface = '',
   });
 
   String get cpuTemp => cpuTempC > 0 ? '${cpuTempC.toStringAsFixed(1)}°C' : '-';

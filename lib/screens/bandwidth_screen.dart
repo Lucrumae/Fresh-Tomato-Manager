@@ -257,7 +257,7 @@ class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
     super.initState();
     // Refresh traffic history every 3s for realtime cumulative display
     // /proc/net/dev counters update immediately, so 3s gives smooth updates
-    _trafficTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    _trafficTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) ref.read(_trafficTickProvider.notifier).state++;
     });
   }

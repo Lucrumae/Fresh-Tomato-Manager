@@ -102,7 +102,7 @@ class RouterStatusNotifier extends StateNotifier<RouterStatus> {
     // Fetch full status immediately on start
     fetchFull();
     // Fast poll: CPU/RAM/temp every 2 seconds
-    _fastTimer = Timer.periodic(const Duration(seconds: 1), (_) => fetchFast());
+    _fastTimer = Timer.periodic(const Duration(seconds: 2), (_) => fetchFast());
     // Slow poll: nvram info every 30 seconds
     _slowTimer = Timer.periodic(const Duration(seconds: 30), (_) => fetchFull());
   }
@@ -210,7 +210,7 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   void startPolling() {
     _timer?.cancel();
     _poll();
-    _timer = Timer.periodic(const Duration(seconds: 2), (_) => _poll());
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _poll());
   }
 
   void stopPolling() => _timer?.cancel();
@@ -224,8 +224,8 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
     if (_firstSample) { _lastSample = sample; _firstSample = false; return; }
     final rxDelta = (rx - _lastSample['rx']!).clamp(0, 999999999);
     final txDelta = (tx - _lastSample['tx']!).clamp(0, 999999999);
-    final rxKbps = rxDelta / 2 / 1024 * 8;
-    final txKbps = txDelta / 2 / 1024 * 8;
+    final rxKbps = rxDelta / 1 / 1024 * 8;  // 1s interval
+    final txKbps = txDelta / 1 / 1024 * 8;
     _totalRxMB += rxDelta / 1024 / 1024;
     _totalTxMB += txDelta / 1024 / 1024;
     _lastSample = sample;
