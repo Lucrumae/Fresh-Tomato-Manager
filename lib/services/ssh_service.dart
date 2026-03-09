@@ -296,7 +296,7 @@ class SshService {
   Future<Map<String, int>> getBandwidthRaw() async {
     try {
       final raw = await run(
-        'echo "=IFACE=$(nvram get wan_iface 2>/dev/null || echo "")"; '
+        'echo "=IFACE=\$(nvram get wan_iface 2>/dev/null || echo \"\")"; '
         'cat /proc/net/dev'
       );
 
@@ -515,11 +515,14 @@ class SshService {
         final name = leaseNames[ip] ?? '';
         final iface = parts.length > 5 ? parts[5] : '';
         devices.add(ConnectedDevice(
-          ip:         ip,
-          mac:        mac,
-          name:       name.isNotEmpty ? name : ip,
-          isWireless: iface == 'eth1' || iface == 'eth2' || iface.startsWith('wl'),
-          isBlocked:  false,
+          ip:        ip,
+          mac:       mac,
+          name:      name.isNotEmpty ? name : ip,
+          hostname:  name,
+          interface: iface,
+          rssi:      '',
+          isBlocked: false,
+          lastSeen:  DateTime.now(),
         ));
       }
       return devices;
@@ -564,10 +567,11 @@ class SshService {
         final t = line.trim();
         if (t.isEmpty) continue;
         entries.add(LogEntry(
-          timestamp: DateTime.now(),
-          message:   t,
-          level:     t.toLowerCase().contains('err') || t.toLowerCase().contains('fail')
-                     ? 'error' : t.toLowerCase().contains('warn') ? 'warn' : 'info',
+          time:    DateTime.now(),
+          process: '',
+          level:   t.toLowerCase().contains('err') || t.toLowerCase().contains('fail')
+                   ? 'err' : t.toLowerCase().contains('warn') ? 'warn' : 'info',
+          message: t,
         ));
       }
       return entries.reversed.toList();
@@ -586,13 +590,13 @@ class SshService {
         final parts = entry.split('<');
         if (parts.length >= 6) {
           rules.add(QosRule(
-            id:       DateTime.now().millisecondsSinceEpoch.toString() + rules.length.toString(),
-            name:     parts[0].trim(),
-            proto:    parts[1].trim(),
-            srcIp:    parts[2].trim(),
-            dstPort:  parts[3].trim(),
-            priority: int.tryParse(parts[4].trim()) ?? 3,
-            enabled:  parts[5].trim() == '1',
+            id:          DateTime.now().millisecondsSinceEpoch.toString() + rules.length.toString(),
+            name:        parts[0].trim(),
+            mac:         parts[1].trim(),
+            downloadKbps: int.tryParse(parts[2].trim()) ?? 0,
+            uploadKbps:  int.tryParse(parts[3].trim()) ?? 0,
+            priority:    int.tryParse(parts[4].trim()) ?? 5,
+            enabled:     parts[5].trim() == '1',
           ));
         }
       }
@@ -610,7 +614,7 @@ class SshService {
       if (idx >= 0) existing[idx] = rule;
       else existing.add(rule);
       final encoded = existing.map((r) =>
-        '${r.name}<${r.proto}<${r.srcIp}<${r.dstPort}<${r.priority}<${r.enabled ? 1 : 0}'
+        '${r.name}<${r.mac}<${r.downloadKbps}<${r.uploadKbps}<${r.priority}<${r.enabled ? 1 : 0}'
       ).join('>');
       await run('nvram set qos_iproute="$encoded" && nvram commit');
       return true;
@@ -631,14 +635,13 @@ class SshService {
         if (parts.length >= 6) {
           final protoNum = int.tryParse(parts[1]) ?? 3;
           rules.add(PortForwardRule(
-            id:       DateTime.now().millisecondsSinceEpoch.toString() + rules.length.toString(),
-            enabled:  parts[0] == '1',
-            proto:    protoNum == 1 ? 'tcp' : protoNum == 2 ? 'udp' : 'both',
-            srcIp:    parts[2].trim(),
-            extPort:  parts[3].trim(),
-            intPort:  parts[4].trim(),
-            intIp:    parts[5].trim(),
-            desc:     parts.length > 6 ? parts[6].trim() : '',
+            id:           DateTime.now().millisecondsSinceEpoch.toString() + rules.length.toString(),
+            enabled:      parts[0] == '1',
+            name:         parts.length > 6 ? parts[6].trim() : '',
+            protocol:     protoNum == 1 ? 'tcp' : protoNum == 2 ? 'udp' : 'both',
+            externalPort: int.tryParse(parts[3].trim()) ?? 0,
+            internalPort: int.tryParse(parts[4].trim()) ?? 0,
+            internalIp:   parts[5].trim(),
           ));
         }
       }
@@ -651,8 +654,8 @@ class SshService {
   Future<bool> savePortForwardRules(List<PortForwardRule> rules) async {
     try {
       final encoded = rules.map((r) {
-        final protoNum = r.proto == 'tcp' ? 1 : r.proto == 'udp' ? 2 : 3;
-        return '${r.enabled ? 1 : 0}<$protoNum<${r.srcIp}<${r.extPort}<${r.intPort}<${r.intIp}<${r.desc}';
+        final protoNum = r.protocol == 'tcp' ? 1 : r.protocol == 'udp' ? 2 : 3;
+        return '${r.enabled ? 1 : 0}<$protoNum<0.0.0.0<${r.externalPort}<${r.internalPort}<${r.internalIp}<${r.name}';
       }).join('>');
       await run('nvram set portforward="$encoded" && nvram commit');
       // Apply rules
