@@ -102,43 +102,44 @@ class DashboardScreen extends ConsumerWidget {
               const SizedBox(height: 12),
 
               //  Network info - tap to open WiFi settings 
-              AppCard(
-                onTap: () => _showWifiSettings(context, ref, status, accent),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(children: [
-                      Text('Network', style: Theme.of(context).textTheme.titleSmall),
-                      const Spacer(),
-                      Icon(Icons.settings_rounded, size: 14, color: accent.withOpacity(0.5)),
-                    ]),
-                    const SizedBox(height: 14),
-                    _InfoRow(icon: Icons.language_rounded, label: 'WAN IP', value: status.wanIp),
-                    const SizedBox(height: 10),
-                    _InfoRow(icon: Icons.home_rounded, label: 'LAN IP', value: status.lanIp),
-                    const SizedBox(height: 10),
-                    // WiFi 2.4GHz row with LED
-                    _WifiRow(
-                      label: 'WiFi 2.4GHz',
-                      ssid: status.wifiSsid,
-                      enabled: status.wifi24enabled,
-                      accent: accent,
-                    ),
-                    // WiFi 5GHz row - only if present
-                    if (status.wifi5present) ...[
+              Builder(builder: (netCtx) {
+                final accent = Theme.of(netCtx).extension<AppColors>()?.accent ?? AppTheme.primary;
+                return AppCard(
+                  onTap: () => _showWifiSettings(context, ref, status, accent),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Text('Network', style: Theme.of(netCtx).textTheme.titleSmall),
+                        const Spacer(),
+                        Icon(Icons.settings_rounded, size: 14, color: accent.withOpacity(0.5)),
+                      ]),
+                      const SizedBox(height: 14),
+                      _InfoRow(icon: Icons.language_rounded, label: 'WAN IP', value: status.wanIp),
+                      const SizedBox(height: 10),
+                      _InfoRow(icon: Icons.home_rounded, label: 'LAN IP', value: status.lanIp),
                       const SizedBox(height: 10),
                       _WifiRow(
-                        label: 'WiFi 5GHz',
-                        ssid: status.wifiSsid5,
-                        enabled: status.wifi5enabled,
+                        label: 'WiFi 2.4GHz',
+                        ssid: status.wifiSsid,
+                        enabled: status.wifi24enabled,
                         accent: accent,
                       ),
+                      if (status.wifi5present) ...[
+                        const SizedBox(height: 10),
+                        _WifiRow(
+                          label: 'WiFi 5GHz',
+                          ssid: status.wifiSsid5,
+                          enabled: status.wifi5enabled,
+                          accent: accent,
+                        ),
+                      ],
+                      const SizedBox(height: 10),
+                      _InfoRow(icon: Icons.schedule_rounded, label: 'Uptime', value: status.uptime),
                     ],
-                    const SizedBox(height: 10),
-                    _InfoRow(icon: Icons.schedule_rounded, label: 'Uptime', value: status.uptime),
-                  ],
-                ),
-              ),
+                  ),
+                );
+              }),
               const SizedBox(height: 12),
 
               //  Quick stats 
