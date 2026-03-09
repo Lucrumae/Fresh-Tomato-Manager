@@ -167,6 +167,10 @@ class DashboardScreen extends ConsumerWidget {
               ]),
               const SizedBox(height: 12),
 
+              //  Ethernet Port State 
+              _EthernetPortCard(),
+              const SizedBox(height: 12),
+
               //  Firmware 
               AppCard(
                 child: Row(
@@ -773,6 +777,128 @@ class _WifiSettingsSheetState extends ConsumerState<_WifiSettingsSheet> {
         child: Text(labels[o] ?? o, style: const TextStyle(fontSize: 13)),
       )).toList(),
       onChanged: (v) { if (v != null) onChanged(v); },
+    );
+  }
+}
+
+// ─── Ethernet Port State Card ─────────────────────────────────────────────────
+class _EthernetPortCard extends ConsumerWidget {
+  const _EthernetPortCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ports = ref.watch(ethernetPortsProvider);
+    final c     = Theme.of(context).extension<AppColors>()!;
+
+    return AppCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(Icons.settings_ethernet_rounded, size: 18, color: c.textSecondary),
+            const SizedBox(width: 8),
+            Text('Ethernet Ports', style: Theme.of(context).textTheme.titleSmall),
+          ]),
+          const SizedBox(height: 14),
+          ports.when(
+            loading: () => const Center(
+              child: Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(strokeWidth: 1.5),
+              ),
+            ),
+            error: (_, __) => Text('Could not read port state',
+              style: TextStyle(color: c.textMuted, fontSize: 12)),
+            data: (portList) {
+              if (portList.isEmpty) {
+                return Text('No port data available',
+                  style: TextStyle(color: c.textMuted, fontSize: 12));
+              }
+              return Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: portList.map((p) => _PortIndicator(port: p, c: c)).toList(),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _PortIndicator extends StatelessWidget {
+  final Map<String, dynamic> port;
+  final AppColors c;
+  const _PortIndicator({required this.port, required this.c});
+
+  @override
+  Widget build(BuildContext context) {
+    final label = port['port'] as String;
+    final up    = port['up'] as bool?;  // null = unknown
+    final speed = port['speed'] as String;
+    final isWan = label == 'WAN';
+
+    // Colors
+    final Color ledColor = up == null
+        ? Colors.grey.shade500
+        : up ? (isWan ? AppTheme.success : const Color(0xFF4CAF50)) : Colors.redAccent;
+
+    final Color portColor = isWan
+        ? const Color(0xFF4F9EE8).withOpacity(0.15)
+        : c.surface;
+
+    final Color borderColor = isWan
+        ? const Color(0xFF4F9EE8).withOpacity(0.5)
+        : c.border;
+
+    return Column(
+      children: [
+        // Port icon + LED
+        Stack(
+          alignment: Alignment.topRight,
+          children: [
+            Container(
+              width: 44, height: 36,
+              decoration: BoxDecoration(
+                color: portColor,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: borderColor, width: 1.5),
+              ),
+              child: Icon(
+                isWan ? Icons.language_rounded : Icons.settings_ethernet_rounded,
+                size: 20,
+                color: up == true
+                    ? (isWan ? const Color(0xFF4F9EE8) : const Color(0xFF4CAF50))
+                    : c.textMuted,
+              ),
+            ),
+            // LED indicator
+            Positioned(
+              top: 3, right: 3,
+              child: Container(
+                width: 7, height: 7,
+                decoration: BoxDecoration(
+                  color: ledColor,
+                  shape: BoxShape.circle,
+                  boxShadow: up == true ? [
+                    BoxShadow(color: ledColor.withOpacity(0.5), blurRadius: 4, spreadRadius: 1),
+                  ] : null,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 5),
+        Text(label, style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w600,
+          color: isWan ? const Color(0xFF4F9EE8) : c.textSecondary,
+        )),
+        const SizedBox(height: 1),
+        Text(
+          up == null ? '?' : up ? (speed.isNotEmpty ? '${speed}M' : 'Up') : 'Down',
+          style: TextStyle(fontSize: 9, color: ledColor),
+        ),
+      ],
     );
   }
 }

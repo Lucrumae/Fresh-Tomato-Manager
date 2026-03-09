@@ -948,7 +948,13 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
         // HTB: bandwidth in qos_obw / qos_ibw
         cmds.add('nvram set qos_obw=$obwVal');
         cmds.add('nvram set qos_ibw=$ibwVal');
-        if (defaultClass.isNotEmpty) cmds.add('nvram set qos_default=$defaultClass');
+        if (defaultClass.isNotEmpty) {
+          // nvram qos_default expects an index (0-9)
+          const _classNames = ['Service','VOIP/Game','Remote','WWW','Media',
+              'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
+          final idx = _classNames.indexOf(defaultClass);
+          cmds.add('nvram set qos_default=${idx >= 0 ? idx : 0}');
+        }
       }
       cmds.add('nvram commit');
 
@@ -982,7 +988,11 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     const classOpts = ['Service','VOIP/Game','Remote','WWW','Media',
         'HTTPS/Msgr','Mail','FileXfer','P2P/Bulk','Crawl'];
     final rawDef = d['default'] ?? '';
-    String defClass = classOpts.contains(rawDef) ? rawDef : 'Service';
+    // nvram qos_default stores an index (0-9), not the name string
+    final defIdx = int.tryParse(rawDef);
+    String defClass = (defIdx != null && defIdx < classOpts.length)
+        ? classOpts[defIdx]
+        : (classOpts.contains(rawDef) ? rawDef : 'Service');
     const cakeModeList = [
       MapEntry('0', 'Single class [besteffort]'),
       MapEntry('1', '8 priority [diffserv8] - DSCP'),

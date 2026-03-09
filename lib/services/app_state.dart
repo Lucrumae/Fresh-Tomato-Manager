@@ -327,3 +327,11 @@ class PortForwardNotifier extends StateNotifier<List<PortForwardRule>> {
     ) : r).toList();
   }
 }
+
+// ─── Ethernet Port State ───────────────────────────────────────────────────────
+final ethernetPortsProvider = FutureProvider.autoDispose<List<Map<String, dynamic>>>((ref) async {
+  ref.watch(routerStatusProvider); // refresh whenever status refreshes
+  final ssh = ref.read(sshServiceProvider);
+  if (!ssh.isConnected) return [];
+  return ssh.getEthernetPorts();
+});

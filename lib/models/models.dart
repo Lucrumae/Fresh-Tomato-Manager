@@ -146,14 +146,17 @@ class LogEntry {
   final String process;
   final String level;
   final String message;
+  final String source; // 'system' or 'kernel'
 
   LogEntry({
     required this.time, required this.process,
     required this.level, required this.message,
+    this.source = 'system',
   });
 
   bool get isError => level == 'err' || level == 'crit' || level == 'alert';
   bool get isWarning => level == 'warn';
+  bool get isKernel => source == 'kernel';
 }
 
 // ─── Router Config ────────────────────────────────────────────────────────────

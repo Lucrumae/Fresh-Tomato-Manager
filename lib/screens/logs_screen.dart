@@ -22,7 +22,6 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
   }
 
   void _scrollToBottom() {
-    // Use multiple frames to ensure list is fully laid out
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -32,10 +31,11 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
       });
     });
   }
-  String _filter = 'all'; // all, error, warn
+
+  String _levelFilter  = 'all';  // all, error, warn
+  String _sourceFilter = 'all';  // all, system, kernel
   String _search = '';
   bool _loading = false;
-
   bool _userScrolled = false;
 
   @override
@@ -47,7 +47,6 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     });
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(logsProvider.notifier).startPolling();
-      // Scroll to bottom after first data loads
       Future.delayed(const Duration(milliseconds: 800), _scrollToBottom);
     });
   }
@@ -66,16 +65,25 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
     ref.listen(logsProvider, (_, __) {
       if (!_userScrolled) _scrollToBottom();
     });
-    final logs = ref.watch(logsProvider);
+    final logs   = ref.watch(logsProvider);
+    final c      = Theme.of(context).extension<AppColors>()!;
+    final accent = c.accent;
+
     final filtered = logs.where((l) {
       final matchSearch = _search.isEmpty ||
         l.message.toLowerCase().contains(_search.toLowerCase()) ||
         l.process.toLowerCase().contains(_search.toLowerCase());
-      final matchFilter = _filter == 'all' ||
-        (_filter == 'error' && l.isError) ||
-        (_filter == 'warn' && l.isWarning);
-      return matchSearch && matchFilter;
+      final matchLevel = _levelFilter == 'all' ||
+        (_levelFilter == 'error' && l.isError) ||
+        (_levelFilter == 'warn'  && l.isWarning);
+      final matchSource = _sourceFilter == 'all' ||
+        (_sourceFilter == 'kernel' && l.isKernel) ||
+        (_sourceFilter == 'system' && !l.isKernel);
+      return matchSearch && matchLevel && matchSource;
     }).toList();
+
+    final totalKernel = logs.where((l) => l.isKernel).length;
+    final totalSystem  = logs.where((l) => !l.isKernel).length;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -83,13 +91,10 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         backgroundColor: Theme.of(context).colorScheme.surface,
         title: Text('System Logs', style: Theme.of(context).textTheme.titleLarge),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded),
-            onPressed: _fetch,
-          ),
+          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _fetch),
         ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(100),
+          preferredSize: const Size.fromHeight(116),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(children: [
@@ -105,9 +110,15 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
-                  _Chip(label: 'All', value: 'all', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: 'Errors', value: 'error', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
-                  _Chip(label: 'Warnings', value: 'warn', current: _filter, onTap: (v) { setState(() => _filter = v); _scrollToBottom(); }),
+                  _Chip(label: 'All',    count: logs.length,   value: 'all',    current: _sourceFilter, accent: accent,           c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  _Chip(label: 'System', count: totalSystem,   value: 'system', current: _sourceFilter, accent: accent,           c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  _Chip(label: 'Kernel', count: totalKernel,   value: 'kernel', current: _sourceFilter, accent: const Color(0xFF4F9EE8), c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Container(width: 1, height: 20, color: c.border),
+                  ),
+                  _Chip(label: 'Errors',   value: 'error', current: _levelFilter, accent: AppTheme.danger,   c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); }),
+                  _Chip(label: 'Warnings', value: 'warn',  current: _levelFilter, accent: AppTheme.warning,  c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); }),
                 ]),
               ),
             ]),
@@ -120,16 +131,16 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
           ? Center(child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.article_rounded, size: 48, color: Theme.of(context).extension<AppColors>()!.textMuted),
+                Icon(Icons.article_rounded, size: 48, color: c.textMuted),
                 const SizedBox(height: 12),
-                Text('No logs found', style: TextStyle(color: Theme.of(context).extension<AppColors>()!.textMuted)),
+                Text('No logs found', style: TextStyle(color: c.textMuted)),
               ],
             ))
           : ListView.separated(
               controller: _scrollCtrl,
               padding: const EdgeInsets.all(16),
               itemCount: filtered.length,
-              separatorBuilder: (_, __) => const Divider(height: 1),
+              separatorBuilder: (_, __) => Divider(height: 1, color: c.border),
               itemBuilder: (_, i) => _LogTile(entry: filtered[i]),
             ),
     );
@@ -139,87 +150,113 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
 class _LogTile extends StatelessWidget {
   final LogEntry entry;
   const _LogTile({required this.entry});
-
   @override
   Widget build(BuildContext context) {
-    Color levelColor = AppTheme.textMuted;
-    if (entry.isError) levelColor = AppTheme.danger;
+    final c = Theme.of(context).extension<AppColors>()!;
+    Color levelColor;
+    if (entry.isError)        levelColor = AppTheme.danger;
     else if (entry.isWarning) levelColor = AppTheme.warning;
+    else                      levelColor = c.textMuted;
 
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Level indicator
-          Container(
-            width: 4, height: 40,
-            margin: const EdgeInsets.only(right: 12),
-            decoration: BoxDecoration(
-              color: levelColor,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(children: [
-                  Text(
-                    entry.process,
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: levelColor),
-                  ),
-                  const Spacer(),
-                  Text(
-                    DateFormat('HH:mm:ss').format(entry.time),
-                    style: TextStyle(fontSize: 11, color: Theme.of(context).extension<AppColors>()!.textMuted),
-                  ),
-                ]),
-                const SizedBox(height: 3),
-                Text(
-                  entry.message,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: entry.isError ? AppTheme.danger.withOpacity(0.8) : AppTheme.textSecondary,
-                  ),
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Container(
+          width: 3, height: 42,
+          margin: const EdgeInsets.only(right: 10, top: 1),
+          decoration: BoxDecoration(
+            color: levelColor, borderRadius: BorderRadius.circular(2)),
+        ),
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              margin: const EdgeInsets.only(right: 6),
+              decoration: BoxDecoration(
+                color: entry.isKernel
+                    ? const Color(0xFF4F9EE8).withOpacity(0.14)
+                    : c.accent.withOpacity(0.10),
+                borderRadius: BorderRadius.circular(3),
+              ),
+              child: Text(
+                entry.isKernel ? 'KERN' : 'SYS',
+                style: TextStyle(
+                  fontSize: 9, fontWeight: FontWeight.w700,
+                  color: entry.isKernel ? const Color(0xFF4F9EE8) : c.accent,
                 ),
-              ],
+              ),
+            ),
+            Expanded(child: Text(
+              entry.process,
+              style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
+                color: entry.isError ? AppTheme.danger
+                    : entry.isWarning ? AppTheme.warning
+                    : c.textSecondary),
+              overflow: TextOverflow.ellipsis,
+            )),
+            Text(
+              DateFormat('HH:mm:ss').format(entry.time),
+              style: TextStyle(fontSize: 11, color: c.textMuted),
+            ),
+          ]),
+          const SizedBox(height: 3),
+          Text(
+            entry.message,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: entry.isError ? AppTheme.danger.withOpacity(0.85)
+                  : entry.isWarning ? AppTheme.warning.withOpacity(0.85)
+                  : c.textSecondary,
             ),
           ),
-        ],
-      ),
+        ])),
+      ]),
     );
   }
 }
 
 class _Chip extends StatelessWidget {
   final String label, value, current;
+  final int? count;
+  final Color accent;
+  final AppColors c;
   final ValueChanged<String> onTap;
-  const _Chip({required this.label, required this.value, required this.current, required this.onTap});
-
+  const _Chip({required this.label, required this.value, required this.current,
+    required this.accent, required this.c, required this.onTap, this.count});
   @override
   Widget build(BuildContext context) {
     final selected = value == current;
-    final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
-    final c2 = Theme.of(context).extension<AppColors>()!;
     return GestureDetector(
       onTap: () => onTap(value),
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 180),
-        margin: const EdgeInsets.only(right: 8),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        margin: const EdgeInsets.only(right: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? accent.withOpacity(0.15) : c2.cardBg,
+          color: selected ? accent.withOpacity(0.15) : c.cardBg,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: selected ? accent : c2.border,
-            width: selected ? 1.5 : 1,
-          ),
+          border: Border.all(color: selected ? accent : c.border, width: selected ? 1.5 : 1),
         ),
-        child: Text(label, style: TextStyle(
-          fontSize: 12,
-          fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-          color: selected ? accent : c2.textSecondary,
-        )),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(label, style: TextStyle(
+            fontSize: 12,
+            fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+            color: selected ? accent : c.textSecondary,
+          )),
+          if (count != null) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: selected ? accent.withOpacity(0.2) : c.border,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text('$count', style: TextStyle(
+                fontSize: 10, fontWeight: FontWeight.w600,
+                color: selected ? accent : c.textMuted,
+              )),
+            ),
+          ],
+        ]),
       ),
     );
   }

@@ -561,6 +561,103 @@ class SshService {
   }
 
   //  Block/unblock device via iptables 
+  // ─── Ethernet port states via robocfg show ────────────────────────────────
+  // Returns list of maps: [{port:'LAN0', up:true, speed:'1000', duplex:'full'}, ...]
+  // vlan1ports on EA6400: 0 1 2 3 5* (ports 0-3=LAN, 4=WAN, 5=CPU)
+  Future<List<Map<String, dynamic>>> getEthernetPorts() async {
+    try {
+      final raw = await run(
+        'robocfg show 2>/dev/null || echo ""; '
+        'echo "=VLAN="; '
+        'nvram get vlan1ports 2>/dev/null; '
+        'echo "=WANVLAN="; '
+        'nvram get vlan2ports 2>/dev/null'
+      );
+
+      // Parse vlan1ports to know which physical ports are LAN vs WAN
+      final lines = raw.split('\n');
+      String vlan1 = '', vlan2 = '';
+      String section = '';
+      final portLines = <String>[];
+      for (final line in lines) {
+        final t = line.trim();
+        if (t == '=VLAN=')    { section = 'vlan1'; continue; }
+        if (t == '=WANVLAN=') { section = 'vlan2'; continue; }
+        if (section == 'vlan1' && t.isNotEmpty) { vlan1 = t; section = ''; }
+        else if (section == 'vlan2' && t.isNotEmpty) { vlan2 = t; section = ''; }
+        // robocfg show lines: "Port 0: DOWN enabled ..."
+        else if (t.startsWith('Port ') && t.contains(':')) { portLines.add(t); }
+      }
+
+      // Build port role map from nvram vlanXports
+      // Format: "0 1 2 3 5*" — number=port, *=tagged/CPU
+      final lanPorts = <int>{};
+      final wanPorts = <int>{};
+      for (final tok in vlan1.split(RegExp(r'\s+'))) {
+        final n = int.tryParse(tok.replaceAll(RegExp(r'[^0-9]'), ''));
+        if (n != null) lanPorts.add(n);
+      }
+      for (final tok in vlan2.split(RegExp(r'\s+'))) {
+        final n = int.tryParse(tok.replaceAll(RegExp(r'[^0-9]'), ''));
+        if (n != null) wanPorts.add(n);
+      }
+
+      // Parse robocfg port lines
+      // "Port 0: DOWN enabled stp: none vlan: 1 jumbo: off mac: ..."
+      // "Port 0: UP 1000FD enabled stp: none vlan: 1 ..."
+      final portRe = RegExp(r'^Port (\d+):\s+(UP|DOWN)(?:\s+(\d+)(FD|HD))?', caseSensitive: false);
+      final result = <Map<String, dynamic>>[];
+
+      if (portLines.isNotEmpty) {
+        for (final pl in portLines) {
+          final m = portRe.firstMatch(pl);
+          if (m == null) continue;
+          final portNum = int.parse(m.group(1)!);
+          final isUp    = m.group(2)!.toUpperCase() == 'UP';
+          final speed   = m.group(3) ?? '';
+          final duplex  = m.group(4) ?? '';
+
+          // Skip CPU port (usually port 5 marked with * in vlanports)
+          // Determine label
+          String label;
+          if (wanPorts.contains(portNum)) {
+            label = 'WAN';
+          } else if (lanPorts.contains(portNum)) {
+            // LAN ports: number them 0..N in order of appearance
+            final lanList = lanPorts.where((p) => !wanPorts.contains(p)).toList()..sort();
+            final idx     = lanList.indexOf(portNum);
+            label = 'LAN${idx >= 0 ? idx : portNum}';
+          } else {
+            continue; // CPU/uplink port, skip
+          }
+          result.add({'port': label, 'up': isUp, 'speed': speed, 'duplex': duplex.toLowerCase()});
+        }
+      } else {
+        // robocfg not available — fallback: check /proc/net/dev for non-zero traffic
+        // Show LAN0-LAN3 + WAN based on vlan config, all unknown state
+        final lanList = lanPorts.difference(wanPorts).toList()..sort();
+        for (int i = 0; i < lanList.length; i++) {
+          result.add({'port': 'LAN$i', 'up': null, 'speed': '', 'duplex': ''});
+        }
+        if (wanPorts.isNotEmpty) {
+          result.add({'port': 'WAN', 'up': null, 'speed': '', 'duplex': ''});
+        }
+      }
+
+      // Sort: LAN0, LAN1... then WAN last
+      result.sort((a, b) {
+        final aPort = a['port'] as String;
+        final bPort = b['port'] as String;
+        if (aPort == 'WAN') return 1;
+        if (bPort == 'WAN') return -1;
+        return aPort.compareTo(bPort);
+      });
+      return result;
+    } catch (e) {
+      return [];
+    }
+  }
+
   Future<bool> blockDevice(String mac, bool block) async {
     try {
       if (block) {
@@ -585,35 +682,35 @@ class SshService {
   Future<List<LogEntry>> getLogs() async {
     try {
       final raw = await run(
-        'cat /var/log/messages 2>/dev/null | tail -300 || '
-        'logread 2>/dev/null | tail -300 || '
-        'dmesg 2>/dev/null | tail -100 || echo ""'
+        'cat /var/log/messages 2>/dev/null | tail -400 || '
+        'logread 2>/dev/null | tail -400 || '
+        'dmesg 2>/dev/null | tail -200 || echo ""'
       );
       if (raw.trim().isEmpty) return [];
 
-      final entries = <LogEntry>[];
       // BusyBox syslog format: "Jan  1 07:00:03 unknown kern.notice kernel: message"
-      // Fields: month day time hostname facility.level process: message
+      // facility.level where facility = kern|daemon|syslog|user|auth|etc
       final syslogRe = RegExp(
         r'^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+(\S+?)\.(\w+)\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
       );
-      // Fallback simple syslog: "Jan  1 07:00:03 hostname process: message"
       final simpleSyslogRe = RegExp(
         r'^(\w{3}\s+\d+\s+\d+:\d+:\d+)\s+\S+\s+(\S+?)(?:\[\d+\])?:\s*(.*)$'
       );
 
+      final entries = <LogEntry>[];
       for (final line in raw.split('\n')) {
         final t = line.trim();
         if (t.isEmpty) continue;
 
-        String timeStr = '', process = '', levelStr = '', message = t;
+        String timeStr = '', process = '', levelStr = '', facility = '', message = t;
 
         final m1 = syslogRe.firstMatch(t);
         final m2 = m1 == null ? simpleSyslogRe.firstMatch(t) : null;
 
         if (m1 != null) {
           timeStr  = m1.group(1) ?? '';
-          levelStr = m1.group(3) ?? ''; // notice, warn, err, debug, info, crit
+          facility = m1.group(2) ?? ''; // kern, daemon, syslog...
+          levelStr = m1.group(3) ?? ''; // notice, warn, err, debug
           process  = m1.group(4) ?? '';
           message  = m1.group(5) ?? t;
         } else if (m2 != null) {
@@ -621,6 +718,9 @@ class SshService {
           process = m2.group(2) ?? '';
           message = m2.group(3) ?? t;
         }
+
+        // source: kernel if facility=kern OR process=kernel
+        final source = (facility == 'kern' || process == 'kernel') ? 'kernel' : 'system';
 
         // Map syslog severity to our levels
         String level = 'info';
@@ -633,12 +733,10 @@ class SshService {
         } else if (lev == 'debug') {
           level = 'debug';
         }
-
-        // Fallback: scan message text if no level from format
+        // Fallback text scan if no structured level
         if (levelStr.isEmpty) {
           final lower = message.toLowerCase();
-          if (lower.contains('error') || lower.contains('fail') ||
-              lower.contains('crit')) {
+          if (lower.contains('error') || lower.contains('fail') || lower.contains('crit')) {
             level = 'err';
           } else if (lower.contains('warn')) {
             level = 'warn';
@@ -648,9 +746,8 @@ class SshService {
         DateTime time = DateTime.now();
         if (timeStr.isNotEmpty) {
           try {
-            // BusyBox uses current year implicitly; add year for parsing
             final withYear = '${timeStr.replaceAll(RegExp(r'\s+'), ' ')} ${DateTime.now().year}';
-            time = DateTime.parse(withYear) ;
+            time = DateTime.parse(withYear);
           } catch (_) {}
         }
 
@@ -659,6 +756,7 @@ class SshService {
           process: process,
           level:   level,
           message: message,
+          source:  source,
         ));
       }
       return entries.reversed.toList();

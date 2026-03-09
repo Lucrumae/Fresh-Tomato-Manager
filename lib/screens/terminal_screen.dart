@@ -255,11 +255,13 @@ class _TS extends ConsumerState<TerminalScreen> {
                   Text('Starting shell...', style:GoogleFonts.jetBrainsMono(
                     color:_accent, fontSize:11)),
                 ]))
-              : ListView.builder(
-                  controller:_scroll,
-                  padding:const EdgeInsets.fromLTRB(8,4,8,4),
-                  itemCount:_lines.length,
-                  itemBuilder:(c,i)=>_buildLine(_lines[i]),
+              : SelectionArea(
+                  child: ListView.builder(
+                    controller:_scroll,
+                    padding:const EdgeInsets.fromLTRB(8,4,8,4),
+                    itemCount:_lines.length,
+                    itemBuilder:(c,i)=>_buildLine(_lines[i]),
+                  ),
                 ),
           ),
 
@@ -375,8 +377,8 @@ class _TS extends ConsumerState<TerminalScreen> {
 
   Widget _buildLine(_Line l) {
     if(l.spans.isEmpty) return const SizedBox(height:13);
-    return RichText(
-      text:TextSpan(children:l.spans.map((s)=>TextSpan(
+    return Text.rich(
+      TextSpan(children:l.spans.map((s)=>TextSpan(
         text:s.text,
         style:GoogleFonts.jetBrainsMono(
           fontSize:10.5, height:1.35,
