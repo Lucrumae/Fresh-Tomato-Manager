@@ -759,7 +759,7 @@ class SshService {
           source:  source,
         ));
       }
-      return entries.reversed.toList();
+      return entries; // oldest first → newest last, ListView scrolls to bottom
     } catch (e) {
       return [];
     }

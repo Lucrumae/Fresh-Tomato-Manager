@@ -12,21 +12,15 @@ class QosScreen extends ConsumerStatefulWidget {
 }
 
 class _QosScreenState extends ConsumerState<QosScreen> {
-  bool _loading = false;
-
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      setState(() => _loading = true);
-      await ref.read(qosProvider.notifier).fetch();
-      if (mounted) setState(() => _loading = false);
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final rules = ref.watch(qosProvider);
+    final rules   = ref.watch(qosProvider);
+    final loading = rules.isEmpty;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -39,7 +33,7 @@ class _QosScreenState extends ConsumerState<QosScreen> {
         backgroundColor: AppTheme.primary,
         child: const Icon(Icons.add_rounded, color: Colors.white),
       ),
-      body: (_loading && rules.isEmpty)
+      body: (loading && rules.isEmpty)
         ? const Center(child: CircularProgressIndicator())
         : rules.isEmpty
           ? _empty()

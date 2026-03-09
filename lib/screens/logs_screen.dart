@@ -13,61 +13,56 @@ class LogsScreen extends ConsumerStatefulWidget {
 
 class _LogsScreenState extends ConsumerState<LogsScreen> {
   final _scrollCtrl = ScrollController();
-
-  @override
-  void dispose() {
-    ref.read(logsProvider.notifier).stopPolling();
-    _scrollCtrl.dispose();
-    super.dispose();
-  }
-
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_scrollCtrl.hasClients) {
-          _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-        }
-      });
-    });
-  }
-
-  String _levelFilter  = 'all';  // all, error, warn
-  String _sourceFilter = 'all';  // all, system, kernel
+  String _levelFilter  = 'all';
+  String _sourceFilter = 'all';
   String _search = '';
-  bool _loading = false;
-  bool _userScrolled = false;
+  // Track if user has manually scrolled up (away from bottom)
+  bool _userScrolledUp = false;
+  // Track last log count to detect new entries
+  int _lastCount = 0;
 
   @override
   void initState() {
     super.initState();
-    _scrollCtrl.addListener(() {
-      final pos = _scrollCtrl.position;
-      _userScrolled = pos.pixels < pos.maxScrollExtent - 50;
-    });
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(logsProvider.notifier).startPolling();
-      Future.delayed(const Duration(milliseconds: 800), _scrollToBottom);
-    });
+    _scrollCtrl.addListener(_onScroll);
+    // Scroll to bottom after first frame (show newest logs immediately)
+    WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
   }
 
-  Future<void> _fetch() async {
-    setState(() => _loading = true);
-    await ref.read(logsProvider.notifier).fetch();
-    if (mounted) {
-      setState(() => _loading = false);
-      if (!_userScrolled) _scrollToBottom();
-    }
+  @override
+  void dispose() {
+    _scrollCtrl.removeListener(_onScroll);
+    _scrollCtrl.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (!_scrollCtrl.hasClients) return;
+    final pos = _scrollCtrl.position;
+    // If user scrolled more than 80px from bottom → they want to read, don't auto-scroll
+    _userScrolledUp = pos.pixels < pos.maxScrollExtent - 80;
+  }
+
+  void _scrollToBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scrollCtrl.hasClients) return;
+      _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
+    });
   }
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(logsProvider, (_, __) {
-      if (!_userScrolled) _scrollToBottom();
-    });
     final logs   = ref.watch(logsProvider);
     final c      = Theme.of(context).extension<AppColors>()!;
     final accent = c.accent;
+
+    // Auto-scroll to bottom when new logs arrive (unless user scrolled up)
+    if (logs.length != _lastCount) {
+      _lastCount = logs.length;
+      if (!_userScrolledUp) {
+        WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
+      }
+    }
 
     final filtered = logs.where((l) {
       final matchSearch = _search.isEmpty ||
@@ -84,6 +79,8 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
 
     final totalKernel = logs.where((l) => l.isKernel).length;
     final totalSystem  = logs.where((l) => !l.isKernel).length;
+    final totalErrors  = logs.where((l) => l.isError).length;
+    final totalWarns   = logs.where((l) => l.isWarning).length;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -91,7 +88,20 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
         backgroundColor: Theme.of(context).colorScheme.surface,
         title: Text('System Logs', style: Theme.of(context).textTheme.titleLarge),
         actions: [
-          IconButton(icon: const Icon(Icons.refresh_rounded), onPressed: _fetch),
+          // Jump to bottom button (shown when user scrolled up)
+          if (_userScrolledUp)
+            IconButton(
+              icon: const Icon(Icons.arrow_downward_rounded),
+              tooltip: 'Jump to latest',
+              onPressed: () {
+                setState(() => _userScrolledUp = false);
+                _scrollToBottom();
+              },
+            ),
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            onPressed: () => ref.read(logsProvider.notifier).fetch(),
+          ),
         ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(116),
@@ -99,7 +109,7 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: Column(children: [
               TextField(
-                onChanged: (v) => setState(() => _search = v),
+                onChanged: (v) => setState(() { _search = v; if (!_userScrolledUp) _scrollToBottom(); }),
                 decoration: const InputDecoration(
                   hintText: 'Search logs...',
                   prefixIcon: Icon(Icons.search_rounded, size: 20),
@@ -110,23 +120,30 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
               SingleChildScrollView(
                 scrollDirection: Axis.horizontal,
                 child: Row(children: [
-                  _Chip(label: 'All',    count: logs.length,   value: 'all',    current: _sourceFilter, accent: accent,           c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
-                  _Chip(label: 'System', count: totalSystem,   value: 'system', current: _sourceFilter, accent: accent,           c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
-                  _Chip(label: 'Kernel', count: totalKernel,   value: 'kernel', current: _sourceFilter, accent: const Color(0xFF4F9EE8), c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  _Chip(label: 'All',      count: logs.length,   value: 'all',    current: _sourceFilter, accent: accent,               c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  _Chip(label: 'System',   count: totalSystem,   value: 'system', current: _sourceFilter, accent: accent,               c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
+                  _Chip(label: 'Kernel',   count: totalKernel,   value: 'kernel', current: _sourceFilter, accent: const Color(0xFF4F9EE8), c: c, onTap: (v) { setState(() { _sourceFilter = v; }); _scrollToBottom(); }),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 8),
                     child: Container(width: 1, height: 20, color: c.border),
                   ),
-                  _Chip(label: 'Errors',   value: 'error', current: _levelFilter, accent: AppTheme.danger,   c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); }),
-                  _Chip(label: 'Warnings', value: 'warn',  current: _levelFilter, accent: AppTheme.warning,  c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); }),
+                  _Chip(label: 'Errors',   count: totalErrors,   value: 'error', current: _levelFilter, accent: AppTheme.danger,   c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); _scrollToBottom(); }),
+                  _Chip(label: 'Warnings', count: totalWarns,    value: 'warn',  current: _levelFilter, accent: AppTheme.warning,  c: c, onTap: (v) { setState(() { _levelFilter = _levelFilter == v ? 'all' : v; }); _scrollToBottom(); }),
                 ]),
               ),
             ]),
           ),
         ),
       ),
-      body: (_loading && ref.read(logsProvider).isEmpty)
-        ? const Center(child: CircularProgressIndicator())
+      body: logs.isEmpty
+        ? Center(child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const CircularProgressIndicator(strokeWidth: 2),
+              const SizedBox(height: 16),
+              Text('Loading logs...', style: TextStyle(color: c.textMuted)),
+            ],
+          ))
         : filtered.isEmpty
           ? Center(child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -136,13 +153,33 @@ class _LogsScreenState extends ConsumerState<LogsScreen> {
                 Text('No logs found', style: TextStyle(color: c.textMuted)),
               ],
             ))
-          : ListView.separated(
-              controller: _scrollCtrl,
-              padding: const EdgeInsets.all(16),
-              itemCount: filtered.length,
-              separatorBuilder: (_, __) => Divider(height: 1, color: c.border),
-              itemBuilder: (_, i) => _LogTile(entry: filtered[i]),
-            ),
+          : Stack(children: [
+              ListView.separated(
+                controller: _scrollCtrl,
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 80),
+                itemCount: filtered.length,
+                separatorBuilder: (_, __) => Divider(height: 1, color: c.border),
+                itemBuilder: (_, i) => _LogTile(entry: filtered[i]),
+              ),
+              // "Latest" label at bottom
+              Positioned(
+                bottom: 16, left: 0, right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: c.cardBg.withOpacity(0.9),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: c.border),
+                    ),
+                    child: Text(
+                      '▼ Latest — ${filtered.length} entries',
+                      style: TextStyle(fontSize: 11, color: c.textMuted),
+                    ),
+                  ),
+                ),
+              ),
+            ]),
     );
   }
 }

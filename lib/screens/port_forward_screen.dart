@@ -11,21 +11,15 @@ class PortForwardScreen extends ConsumerStatefulWidget {
 }
 
 class _PortForwardScreenState extends ConsumerState<PortForwardScreen> {
-  bool _loading = false;
-
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) async {
-      setState(() => _loading = true);
-      await ref.read(portForwardProvider.notifier).fetch();
-      if (mounted) setState(() => _loading = false);
-    });
   }
 
   @override
   Widget build(BuildContext context) {
-    final rules = ref.watch(portForwardProvider);
+    final rules   = ref.watch(portForwardProvider);
+    final loading = rules.isEmpty;
 
     return Scaffold(
       backgroundColor: Theme.of(context).scaffoldBackgroundColor,
@@ -51,7 +45,7 @@ class _PortForwardScreenState extends ConsumerState<PortForwardScreen> {
         backgroundColor: AppTheme.primary,
         child: const Icon(Icons.add_rounded, color: Colors.white),
       ),
-      body: (_loading && rules.isEmpty)
+      body: (loading && rules.isEmpty)
         ? const Center(child: CircularProgressIndicator())
         : rules.isEmpty
           ? Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [

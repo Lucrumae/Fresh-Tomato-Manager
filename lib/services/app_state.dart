@@ -8,22 +8,20 @@ import '../theme/app_theme.dart';
 import 'ssh_service.dart';
 import 'notification_service.dart';
 
-//  SSH Service singleton 
+//  SSH Service singleton
 final sshServiceProvider = Provider<SshService>((ref) => SshService());
 
-//  Dark mode 
+//  Dark mode
 final darkModeProvider = StateNotifierProvider<DarkModeNotifier, bool>((ref) {
   return DarkModeNotifier();
 });
 
 class DarkModeNotifier extends StateNotifier<bool> {
   DarkModeNotifier() : super(false) { _load(); }
-
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     state = prefs.getBool('dark_mode') ?? false;
   }
-
   Future<void> toggle() async {
     state = !state;
     final prefs = await SharedPreferences.getInstance();
@@ -31,20 +29,18 @@ class DarkModeNotifier extends StateNotifier<bool> {
   }
 }
 
-//  Accent color 
+//  Accent color
 final accentProvider = StateNotifierProvider<AccentNotifier, AccentColor>((ref) {
   return AccentNotifier();
 });
 
 class AccentNotifier extends StateNotifier<AccentColor> {
   AccentNotifier() : super(AccentColor.green) { _load(); }
-
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final idx = prefs.getInt('accent_color') ?? 0;
     state = AccentColor.values[idx.clamp(0, AccentColor.values.length - 1)];
   }
-
   Future<void> set(AccentColor accent) async {
     state = accent;
     final prefs = await SharedPreferences.getInstance();
@@ -52,27 +48,23 @@ class AccentNotifier extends StateNotifier<AccentColor> {
   }
 }
 
-
-//  Config 
+//  Config
 final configProvider = StateNotifierProvider<ConfigNotifier, TomatoConfig?>((ref) {
   return ConfigNotifier();
 });
 
 class ConfigNotifier extends StateNotifier<TomatoConfig?> {
   ConfigNotifier() : super(null) { _load(); }
-
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final json = prefs.getString('router_config');
     if (json != null) state = TomatoConfig.fromJson(jsonDecode(json));
   }
-
   Future<void> save(TomatoConfig config) async {
     state = config;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('router_config', jsonEncode(config.toJson()));
   }
-
   Future<void> clear() async {
     state = null;
     final prefs = await SharedPreferences.getInstance();
@@ -80,30 +72,27 @@ class ConfigNotifier extends StateNotifier<TomatoConfig?> {
   }
 }
 
-//  Network type (WiFi check) 
+//  Network type
 final networkTypeProvider = StreamProvider<ConnectivityResult>((ref) {
   return Connectivity().onConnectivityChanged;
 });
 
-//  Router status 
+// ─── Router Status ─────────────────────────────────────────────────────────────
 final routerStatusProvider = StateNotifierProvider<RouterStatusNotifier, RouterStatus>((ref) {
   return RouterStatusNotifier(ref);
 });
 
 class RouterStatusNotifier extends StateNotifier<RouterStatus> {
   final Ref _ref;
-  Timer? _fastTimer;  // 2s - CPU, RAM, temp
-  Timer? _slowTimer;  // 30s - nvram info (model, IP, etc)
+  Timer? _fastTimer;  // 1s  - CPU, RAM, temp
+  Timer? _slowTimer;  // 30s - nvram info, ethernet ports
   RouterStatusNotifier(this._ref) : super(RouterStatus.empty());
 
   void startPolling() {
     _fastTimer?.cancel();
     _slowTimer?.cancel();
-    // Fetch full status immediately on start
     fetchFull();
-    // Fast poll: CPU/RAM/temp every 2 seconds
-    _fastTimer = Timer.periodic(const Duration(seconds: 1), (_) => fetchFast());
-    // Slow poll: nvram info every 30 seconds
+    _fastTimer = Timer.periodic(const Duration(seconds: 1),  (_) => fetchFast());
     _slowTimer = Timer.periodic(const Duration(seconds: 30), (_) => fetchFull());
   }
 
@@ -124,18 +113,16 @@ class RouterStatusNotifier extends StateNotifier<RouterStatus> {
     if (!ssh.isConnected) return;
     final status = await ssh.getStatus();
     if (mounted) state = status;
-    // Also refresh ethernet port state (robocfg is fast, run alongside)
     _ref.read(ethernetPortsProvider.notifier).fetch();
   }
 
-  // Keep fetch() for compatibility
   Future<void> fetch() => fetchFull();
 
   @override
   void dispose() { _fastTimer?.cancel(); _slowTimer?.cancel(); super.dispose(); }
 }
 
-//  Devices 
+// ─── Devices ───────────────────────────────────────────────────────────────────
 final devicesProvider = StateNotifierProvider<DevicesNotifier, List<ConnectedDevice>>((ref) {
   return DevicesNotifier(ref);
 });
@@ -149,7 +136,7 @@ class DevicesNotifier extends StateNotifier<List<ConnectedDevice>> {
   void startPolling() {
     _timer?.cancel();
     fetch();
-    _timer = Timer.periodic(const Duration(seconds: 10), (_) => fetch());
+    _timer = Timer.periodic(const Duration(seconds: 5), (_) => fetch());
   }
 
   void stopPolling() => _timer?.cancel();
@@ -194,7 +181,7 @@ class DevicesNotifier extends StateNotifier<List<ConnectedDevice>> {
   void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-//  Bandwidth 
+// ─── Bandwidth ─────────────────────────────────────────────────────────────────
 final bandwidthProvider = StateNotifierProvider<BandwidthNotifier, BandwidthStats>((ref) {
   return BandwidthNotifier(ref);
 });
@@ -206,7 +193,6 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   Map<String, int> _lastSample = {'rx': 0, 'tx': 0};
   bool _firstSample = true;
   double _totalRxMB = 0, _totalTxMB = 0;
-
   BandwidthNotifier(this._ref) : super(BandwidthStats.empty());
 
   void startPolling() {
@@ -226,7 +212,7 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
     if (_firstSample) { _lastSample = sample; _firstSample = false; return; }
     final rxDelta = (rx - _lastSample['rx']!).clamp(0, 999999999);
     final txDelta = (tx - _lastSample['tx']!).clamp(0, 999999999);
-    final rxKbps = rxDelta / 1 / 1024 * 8;  // 1s interval
+    final rxKbps = rxDelta / 1 / 1024 * 8;
     final txKbps = txDelta / 1 / 1024 * 8;
     _totalRxMB += rxDelta / 1024 / 1024;
     _totalTxMB += txDelta / 1024 / 1024;
@@ -248,7 +234,7 @@ class BandwidthNotifier extends StateNotifier<BandwidthStats> {
   void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-//  Logs 
+// ─── Logs ──────────────────────────────────────────────────────────────────────
 final logsProvider = StateNotifierProvider<LogsNotifier, List<LogEntry>>((ref) {
   return LogsNotifier(ref);
 });
@@ -261,7 +247,8 @@ class LogsNotifier extends StateNotifier<List<LogEntry>> {
   void startPolling() {
     _timer?.cancel();
     fetch();
-    _timer = Timer.periodic(const Duration(seconds: 10), (_) => fetch());
+    // Poll every 3s - logs need to be near-realtime
+    _timer = Timer.periodic(const Duration(seconds: 3), (_) => fetch());
   }
 
   void stopPolling() => _timer?.cancel();
@@ -277,17 +264,27 @@ class LogsNotifier extends StateNotifier<List<LogEntry>> {
   void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-//  QoS 
+// ─── QoS Rules ────────────────────────────────────────────────────────────────
 final qosProvider = StateNotifierProvider<QosNotifier, List<QosRule>>((ref) {
   return QosNotifier(ref);
 });
 
 class QosNotifier extends StateNotifier<List<QosRule>> {
   final Ref _ref;
+  Timer? _timer;
   QosNotifier(this._ref) : super([]);
+
+  void startPolling() {
+    _timer?.cancel();
+    fetch();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => fetch());
+  }
+
+  void stopPolling() => _timer?.cancel();
 
   Future<void> fetch() async {
     final ssh = _ref.read(sshServiceProvider);
+    if (!ssh.isConnected) return;
     if (mounted) state = await ssh.getQosRules();
   }
 
@@ -297,19 +294,32 @@ class QosNotifier extends StateNotifier<List<QosRule>> {
     if (ok) await fetch();
     return ok;
   }
+
+  @override
+  void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-//  Port Forward 
+// ─── Port Forward ──────────────────────────────────────────────────────────────
 final portForwardProvider = StateNotifierProvider<PortForwardNotifier, List<PortForwardRule>>((ref) {
   return PortForwardNotifier(ref);
 });
 
 class PortForwardNotifier extends StateNotifier<List<PortForwardRule>> {
   final Ref _ref;
+  Timer? _timer;
   PortForwardNotifier(this._ref) : super([]);
+
+  void startPolling() {
+    _timer?.cancel();
+    fetch();
+    _timer = Timer.periodic(const Duration(seconds: 30), (_) => fetch());
+  }
+
+  void stopPolling() => _timer?.cancel();
 
   Future<void> fetch() async {
     final ssh = _ref.read(sshServiceProvider);
+    if (!ssh.isConnected) return;
     if (mounted) state = await ssh.getPortForwardRules();
   }
 
@@ -328,9 +338,12 @@ class PortForwardNotifier extends StateNotifier<List<PortForwardRule>> {
       internalIp: r.internalIp, enabled: !r.enabled,
     ) : r).toList();
   }
+
+  @override
+  void dispose() { _timer?.cancel(); super.dispose(); }
 }
 
-// ─── Ethernet Port State ───────────────────────────────────────────────────────
+// ─── Ethernet Ports ────────────────────────────────────────────────────────────
 final ethernetPortsProvider = StateNotifierProvider<EthernetPortsNotifier, List<Map<String, dynamic>>>((ref) {
   return EthernetPortsNotifier(ref);
 });

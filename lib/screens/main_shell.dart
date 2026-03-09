@@ -32,6 +32,9 @@ class _MainShellState extends ConsumerState<MainShell> {
       ref.read(routerStatusProvider.notifier).startPolling();
       ref.read(devicesProvider.notifier).startPolling();
       ref.read(bandwidthProvider.notifier).startPolling();
+      ref.read(logsProvider.notifier).startPolling();
+      ref.read(qosProvider.notifier).startPolling();
+      ref.read(portForwardProvider.notifier).startPolling();
       final keeper = ref.read(connectionKeeperProvider);
       keeper.onFailed = _onReconnectFailed;
       keeper.start();
@@ -44,6 +47,9 @@ class _MainShellState extends ConsumerState<MainShell> {
     ref.read(routerStatusProvider.notifier).stopPolling();
     ref.read(devicesProvider.notifier).stopPolling();
     ref.read(bandwidthProvider.notifier).stopPolling();
+    ref.read(logsProvider.notifier).stopPolling();
+    ref.read(qosProvider.notifier).stopPolling();
+    ref.read(portForwardProvider.notifier).stopPolling();
     super.dispose();
   }
 
@@ -60,6 +66,9 @@ class _MainShellState extends ConsumerState<MainShell> {
     ref.read(routerStatusProvider.notifier).stopPolling();
     ref.read(devicesProvider.notifier).stopPolling();
     ref.read(bandwidthProvider.notifier).stopPolling();
+    ref.read(logsProvider.notifier).stopPolling();
+    ref.read(qosProvider.notifier).stopPolling();
+    ref.read(portForwardProvider.notifier).stopPolling();
     await ref.read(sshServiceProvider).disconnect();
     if (!mounted) return;
     Navigator.of(context).pushAndRemoveUntil(
