@@ -8,11 +8,13 @@ import '../services/ssh_service.dart';
 import '../models/models.dart';
 
 // Traffic history provider
-// Traffic history - auto refreshes every 60s (rstats flushes ~every minute)
+// Traffic tick - increments to trigger realtime refresh
 final _trafficTickProvider = StateProvider<int>((ref) => 0);
 
+// Realtime traffic: reads cumulative /proc/net/dev bytes + historical traff- keys
+// Refreshes every 3s (same cadence as bandwidth chart)
 final trafficHistoryProvider = FutureProvider.autoDispose<Map<String, dynamic>>((ref) async {
-  ref.watch(_trafficTickProvider); // re-run on tick
+  ref.watch(_trafficTickProvider);
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   return ssh.getTrafficHistory();
@@ -28,32 +30,74 @@ final qosBasicProvider = FutureProvider.autoDispose<Map<String, String>>((ref) a
   final ssh = ref.read(sshServiceProvider);
   if (!ssh.isConnected) return {};
   try {
-    // Read all relevant nvram keys individually
-    final enable    = (await ssh.run('nvram get qos_enable')).trim();
-    final type      = (await ssh.run('nvram get qos_type')).trim();
-    final defCls    = (await ssh.run('nvram get qos_default')).trim();
-    final obw       = (await ssh.run('nvram get qos_obw')).trim();
-    final ibw       = (await ssh.run('nvram get qos_ibw')).trim();
-    final cmode     = (await ssh.run('nvram get qos_cmode')).trim();
-    final ack       = (await ssh.run('nvram get qos_ackfilter')).trim();
-    final icmp      = (await ssh.run('nvram get qos_icmp')).trim();
-    final classify  = (await ssh.run('nvram get qos_classify')).trim();
-    final sched     = (await ssh.run('nvram get qos_sched')).trim();
-    final cakeWash  = (await ssh.run('nvram get qos_cake_wash')).trim();
-    final udpNoIng  = (await ssh.run('nvram get qos_udp')).trim();
+    // Read all keys in one shot for efficiency
+    final raw = await ssh.run(
+      'echo "enable=\$(nvram get qos_enable)"; '
+      'echo "mode=\$(nvram get qos_mode)"; '       // 0=disable,1=HTB,2=CAKE,3=CAKE(old)
+      'echo "type=\$(nvram get qos_type)"; '        // some builds use qos_type instead
+      'echo "default=\$(nvram get qos_default)"; '
+      'echo "obw=\$(nvram get qos_obw)"; '          // HTB upload (kbps)
+      'echo "ibw=\$(nvram get qos_ibw)"; '          // HTB download (kbps)
+      'echo "wanobw=\$(nvram get wan_qos_obw)"; '  // CAKE upload (kbps) ← actual key
+      'echo "wanibw=\$(nvram get wan_qos_ibw)"; '  // CAKE download (kbps) ← actual key
+      'echo "cmode=\$(nvram get qos_cmode)"; '
+      'echo "cakeprio=\$(nvram get qos_cake_prio_mode)"; '
+      'echo "ack=\$(nvram get qos_ackfilter)"; '
+      'echo "icmp=\$(nvram get qos_icmp)"; '
+      'echo "classify=\$(nvram get qos_classify)"; '
+      'echo "sched=\$(nvram get qos_sched)"; '
+      'echo "cakewash=\$(nvram get qos_cake_wash)"; '
+      'echo "udp=\$(nvram get qos_udp)"'
+    );
+    final kv = <String, String>{};
+    for (final line in raw.split('\n')) {
+      final idx = line.indexOf('=');
+      if (idx < 0) continue;
+      kv[line.substring(0, idx).trim()] = line.substring(idx + 1).trim();
+    }
+
+    // Resolve the actual mode:
+    // qos_mode: 0=disabled, 1=HTB, 2=CAKE, 3=CAKE (FreshTomato >=2024)
+    // qos_type: 0=HTB, 3=CAKE (older firmware, may be missing)
+    // If qos_mode=2, it's definitely CAKE regardless of qos_type
+    final qosMode = kv['mode'] ?? '';
+    final qosType = kv['type'] ?? '';
+    String resolvedType;
+    if (qosMode == '2' || qosMode == '3') {
+      resolvedType = '3'; // CAKE
+    } else if (qosType == '3') {
+      resolvedType = '3'; // CAKE (old key)
+    } else {
+      resolvedType = '0'; // HTB default
+    }
+
+    // Resolve bandwidth: CAKE uses wan_qos_obw/ibw, HTB uses qos_obw/ibw
+    final isCake = resolvedType == '3';
+    final obw = isCake
+        ? (kv['wanobw']?.isNotEmpty == true && kv['wanobw'] != 'null' ? kv['wanobw']! : '')
+        : (kv['obw']?.isNotEmpty == true && kv['obw'] != 'null' ? kv['obw']! : '');
+    final ibw = isCake
+        ? (kv['wanibw']?.isNotEmpty == true && kv['wanibw'] != 'null' ? kv['wanibw']! : '')
+        : (kv['ibw']?.isNotEmpty == true && kv['ibw'] != 'null' ? kv['ibw']! : '');
+
+    // CAKE priority mode: qos_cake_prio_mode (0-4)
+    final cakeMode = (kv['cakeprio']?.isNotEmpty == true && kv['cakeprio'] != 'null')
+        ? kv['cakeprio']! : (kv['cmode'] ?? '0');
+
     return {
-      'enable':   enable.isEmpty   ? '0' : enable,
-      'type':     type.isEmpty     ? '0' : type,
-      'default':  defCls,
-      'obw':      obw,
-      'ibw':      ibw,
-      'cmode':    cmode.isEmpty    ? '0' : cmode,
-      'ack':      ack.isEmpty      ? '0' : ack,
-      'icmp':     icmp.isEmpty     ? '0' : icmp,
-      'classify': classify.isEmpty ? '1' : classify,
-      'sched':    sched.isEmpty    ? 'fq_codel' : sched,
-      'cake_wash':cakeWash.isEmpty ? '0' : cakeWash,
-      'udp_noing':udpNoIng.isEmpty ? '0' : udpNoIng,
+      'enable':    (kv['enable']   ?? '0').isEmpty ? '0' : (kv['enable'] ?? '0'),
+      'type':      resolvedType,
+      'mode_raw':  qosMode,
+      'default':   kv['default'] ?? '',
+      'obw':       obw,
+      'ibw':       ibw,
+      'cmode':     cakeMode.isEmpty ? '0' : cakeMode,
+      'ack':       (kv['ack']      ?? '0').isEmpty ? '0' : (kv['ack'] ?? '0'),
+      'icmp':      (kv['icmp']     ?? '0').isEmpty ? '0' : (kv['icmp'] ?? '0'),
+      'classify':  (kv['classify'] ?? '1').isEmpty ? '1' : (kv['classify'] ?? '1'),
+      'sched':     (kv['sched']    ?? 'fq_codel').isEmpty ? 'fq_codel' : (kv['sched'] ?? 'fq_codel'),
+      'cake_wash': (kv['cakewash'] ?? '0').isEmpty ? '0' : (kv['cakewash'] ?? '0'),
+      'udp_noing': (kv['udp']      ?? '0').isEmpty ? '0' : (kv['udp'] ?? '0'),
     };
   } catch (_) { return {}; }
 });
@@ -211,11 +255,11 @@ class _BandwidthScreenState extends ConsumerState<BandwidthScreen> {
   @override
   void initState() {
     super.initState();
-    // Refresh traffic history every 60s (rstats daemon updates ~every 60s)
-    _trafficTimer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (mounted) ref.invalidate(trafficHistoryProvider);
+    // Refresh traffic history every 3s for realtime cumulative display
+    // /proc/net/dev counters update immediately, so 3s gives smooth updates
+    _trafficTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+      if (mounted) ref.read(_trafficTickProvider.notifier).state++;
     });
-    // Also add a manual refresh button
   }
 
   @override
@@ -366,16 +410,11 @@ class _BandwidthBody extends StatelessWidget {
         ),
         const SizedBox(height: 24),
 
-        // Usage history section
+        // Usage history section - realtime cumulative
         Row(children: [
           Expanded(child: _SectionHeader(title: 'Usage History', icon: Icons.bar_chart_rounded, color: accent)),
-          IconButton(
-            icon: Icon(Icons.refresh_rounded, size: 18, color: accent),
-            tooltip: 'Refresh',
-            onPressed: () => ref.invalidate(trafficHistoryProvider),
-            padding: const EdgeInsets.all(8),
-            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-          ),
+          // Live indicator - blinks every refresh
+          _LiveBadge(tick: ref.watch(_trafficTickProvider)),
         ]),
         const SizedBox(height: 12),
 
@@ -390,9 +429,9 @@ class _BandwidthBody extends StatelessWidget {
             final monthly = (data['monthly'] as List?) ?? [];
             if (daily.isEmpty && monthly.isEmpty) {
               return const _EmptyCard(
-                  message: 'No traffic data found.\nEnable: Admin > Bandwidth > Traffic Monitoring in FreshTomato.');
+                  message: 'No traffic data.\nMake sure the router is connected.');
             }
-            return _UsageHistoryCard(daily: daily, monthly: monthly);
+            return _UsageHistoryCard(daily: daily, monthly: monthly, isRealtime: monthly.length == 1 && monthly.first['month'] != null);
           },
         ),
         const SizedBox(height: 80),
@@ -404,6 +443,47 @@ class _BandwidthBody extends StatelessWidget {
 // =============================================================================
 // Section header row
 // =============================================================================
+// Live blinking badge for realtime indicators
+class _LiveBadge extends StatefulWidget {
+  final int tick;
+  const _LiveBadge({required this.tick});
+  @override State<_LiveBadge> createState() => _LiveBadgeState();
+}
+class _LiveBadgeState extends State<_LiveBadge> with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))
+      ..repeat(reverse: true);
+  }
+  @override void didUpdateWidget(_LiveBadge old) {
+    super.didUpdateWidget(old);
+    if (old.tick != widget.tick) {
+      _ctrl.reset(); _ctrl.repeat(reverse: true);
+    }
+  }
+  @override void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _ctrl,
+    builder: (_, __) => Row(mainAxisSize: MainAxisSize.min, children: [
+      Container(
+        width: 7, height: 7,
+        decoration: BoxDecoration(
+          color: AppTheme.success.withOpacity(0.4 + 0.6 * _ctrl.value),
+          shape: BoxShape.circle,
+        ),
+      ),
+      const SizedBox(width: 5),
+      Text('Live', style: TextStyle(
+        fontSize: 11, fontWeight: FontWeight.w600,
+        color: AppTheme.success.withOpacity(0.6 + 0.4 * _ctrl.value))),
+    ]),
+  );
+}
+
 class _SectionHeader extends StatelessWidget {
   final String title;
   final IconData icon;
@@ -448,7 +528,8 @@ class _EmptyCard extends StatelessWidget {
 // =============================================================================
 class _UsageHistoryCard extends StatefulWidget {
   final List daily, monthly;
-  const _UsageHistoryCard({required this.daily, required this.monthly});
+  final bool isRealtime;
+  const _UsageHistoryCard({required this.daily, required this.monthly, this.isRealtime = false});
 
   @override
   State<_UsageHistoryCard> createState() => _UsageHistoryCardState();
@@ -475,6 +556,23 @@ class _UsageHistoryCardState extends State<_UsageHistoryCard> {
         Padding(
           padding: const EdgeInsets.all(12),
           child: Row(children: [
+            if (widget.isRealtime) ...[ 
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.success.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+                ),
+                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.info_outline_rounded, size: 11, color: AppTheme.success),
+                  const SizedBox(width: 4),
+                  Text('Since boot', style: TextStyle(
+                    fontSize: 10, color: AppTheme.success, fontWeight: FontWeight.w500)),
+                ]),
+              ),
+            ],
             for (int i = 0; i < 3; i++) ...[
               if (i > 0) const SizedBox(width: 8),
               GestureDetector(
@@ -806,6 +904,12 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     super.dispose();
   }
 
+  String _kbpsToMbps(String kbps) {
+    final v = double.tryParse(kbps) ?? 0;
+    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)} Mbps';
+    return '${v.toStringAsFixed(0)} Kbps';
+  }
+
   Future<void> _save(Map<String, String> current, {
     required bool enabled,
     required String type,
@@ -819,29 +923,43 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     try {
       final obwVal = obw.isNotEmpty ? obw : '0';
       final ibwVal = ibw.isNotEmpty ? ibw : '0';
-      // Send each command individually for reliability
-      final results = <String>[];
-      for (final cmd in [
+      final isCake = type == '3';
+      // qos_mode: 1=HTB, 2=CAKE (FreshTomato >=2024 uses qos_mode not qos_type)
+      final qosMode = isCake ? '2' : '1';
+
+      final cmds = <String>[
         'nvram set qos_enable=${enabled ? 1 : 0}',
-        'nvram set qos_type=$type',
-        if (defaultClass.isNotEmpty) 'nvram set qos_default=$defaultClass',
-        if (type == '3') 'nvram set qos_cmode=$cmode',
-        'nvram set qos_obw=$obwVal',
-        'nvram set qos_ibw=$ibwVal',
-        'nvram commit',
-      ]) {
-        await ssh.run(cmd);
-        results.add(cmd.split(' ').take(3).join(' '));
+        'nvram set qos_mode=$qosMode',
+        'nvram set qos_type=$type',    // set both for compatibility
+      ];
+      if (isCake) {
+        // CAKE: bandwidth stored in wan_qos_obw / wan_qos_ibw
+        cmds.add('nvram set wan_qos_obw=$obwVal');
+        cmds.add('nvram set wan_qos_ibw=$ibwVal');
+        cmds.add('nvram set qos_cake_prio_mode=$cmode');
+        cmds.add('nvram set qos_cmode=$cmode');
+      } else {
+        // HTB: bandwidth in qos_obw / qos_ibw
+        cmds.add('nvram set qos_obw=$obwVal');
+        cmds.add('nvram set qos_ibw=$ibwVal');
+        if (defaultClass.isNotEmpty) cmds.add('nvram set qos_default=$defaultClass');
       }
-      // Read back to verify
-      final vType = (await ssh.run('nvram get qos_type')).trim();
-      final vObw  = (await ssh.run('nvram get qos_obw')).trim();
-      ssh.run('(service qos stop > /dev/null 2>&1; service qos start > /dev/null 2>&1 &)').catchError((_) {});
+      cmds.add('nvram commit');
+
+      for (final cmd in cmds) { await ssh.run(cmd); }
+
+      // Restart QoS service to apply changes
+      ssh.run(
+        '(service qos stop >/dev/null 2>&1; sleep 1; service qos start >/dev/null 2>&1) &'
+      ).catchError((_) {});
+
       ref.invalidate(qosBasicProvider);
       ref.read(_basicTickProvider.notifier).state++;
-      setState(() { _saveMsg = 'Saved! type=$vType obw=$vObw'; });
+      setState(() { _saveMsg = isCake
+        ? 'Saved! CAKE obw=\${obwVal}k ibw=\${ibwVal}k'
+        : 'Saved! HTB obw=\${obwVal}k ibw=\${ibwVal}k'; });
     } catch (e) {
-      setState(() { _saveMsg = 'Error: $e'; });
+      setState(() { _saveMsg = 'Error: \$e'; });
     } finally {
       setState(() { _saving = false; });
     }
@@ -850,6 +968,7 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
   void _showEditDialog(BuildContext ctx, Map<String, String> d) {
     final accent = Theme.of(ctx).extension<AppColors>()?.accent ?? AppTheme.primary;
     bool enabled = (d['enable'] ?? '0') == '1';
+    // type is already resolved by qosBasicProvider: '3'=CAKE, '0'=HTB
     String type  = (d['type'] ?? '0') == '3' ? '3' : '0';
     String cmode = d['cmode'] ?? '0';
     String obw   = d['obw']   ?? '';
@@ -955,7 +1074,7 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
     final accent = Theme.of(context).extension<AppColors>()?.accent ?? AppTheme.primary;
     final c      = Theme.of(context).extension<AppColors>()!;
     // FreshTomato: 0=HTB, 3=CAKE AQM (some builds: 1=CAKE)
-    final modeMap = {'0':'HTB (classic)','1':'CAKE AQM','2':'CAKE AQM','3':'CAKE AQM'};
+    final modeMap = {'0':'HTB (classic)','1':'CAKE AQM','2':'CAKE AQM','3':'CAKE AQM'}; // type is pre-resolved to '0' or '3'
     final cakeModeMap = {
       '0': 'Single class [besteffort]',
       '1': '8 priority [diffserv8]',
@@ -1038,11 +1157,15 @@ class _QosBasicTabState extends ConsumerState<_QosBasicTab> {
                   value: cakeModeMap[d['cmode'] ?? ''] ?? 'Single class [besteffort]'),
               _QRow(
                   label: 'Upload Limit',
-                  value: (d['obw']?.isNotEmpty == true) ? '${d['obw']} kbit/s' : 'Not set',
+                  value: (d['obw']?.isNotEmpty == true && d['obw'] != '0')
+                    ? '${d['obw']} kbps (${_kbpsToMbps(d['obw']!)})'
+                    : 'Not set',
                   valueColor: accent),
               _QRow(
                   label: 'Download Limit',
-                  value: (d['ibw']?.isNotEmpty == true && d['ibw'] != '0') ? '${d['ibw']} kbit/s' : 'Not set',
+                  value: (d['ibw']?.isNotEmpty == true && d['ibw'] != '0')
+                    ? '${d['ibw']} kbps (${_kbpsToMbps(d['ibw']!)})'
+                    : 'Not set',
                   valueColor: accent),
             ]),
           ),

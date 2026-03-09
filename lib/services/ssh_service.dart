@@ -202,27 +202,49 @@ nvram get wl1_crypto
     } catch (_) { return current; }
   }
 
-  //  Traffic history - reads rstats shared memory signal + /proc/net/dev fallback
+  //  Raw bandwidth bytes from /proc/net/dev (WAN = usb0)
+  //  Used by bandwidthProvider for realtime chart polling
+  Future<Map<String, int>> getBandwidthRaw() async {
+    try {
+      // usb0 is the WAN interface (USB tethering)
+      // /proc/net/dev columns: face|rx_bytes rx_pkts ... |tx_bytes tx_pkts...
+      final raw = await run('cat /proc/net/dev');
+      for (final line in raw.split('\n')) {
+        final trimmed = line.trim();
+        if (!trimmed.startsWith('usb0:')) continue;
+        // Format: "usb0: rx_bytes rx_pkts rx_err rx_drop ... tx_bytes ..."
+        final parts = trimmed.replaceFirst('usb0:', '').trim().split(RegExp(r'\s+'));
+        if (parts.length >= 9) {
+          return {
+            'rx': int.tryParse(parts[0]) ?? 0,  // rx_bytes
+            'tx': int.tryParse(parts[8]) ?? 0,  // tx_bytes
+          };
+        }
+      }
+      return {'rx': 0, 'tx': 0};
+    } catch (_) { return {'rx': 0, 'tx': 0}; }
+  }
+
+    //  Traffic history - signal rstats to flush then read traff- nvram keys
+  //  Fallback to /proc/net/dev cumulative bytes (session total) if no nvram data
   Future<Map<String, dynamic>> getTrafficHistory() async {
     try {
-      // FreshTomato rstats daemon stores data in shared memory, also writes to
-      // nvram traff-YYYY-MM keys. Try multiple methods.
+      // Signal rstats daemon to flush current stats to nvram
+      // rstats uses SIGUSR1 to trigger immediate save
       final raw = await run(
-        // Signal rstats to flush current data to nvram
-        r'kill -USR1 $(cat /var/run/rstats.pid 2>/dev/null || pidof rstats 2>/dev/null) 2>/dev/null; '
-        r'sleep 1; '
-        r'echo "=MONTHS="; '
-        // Try to read traff- keys for last 6 months
-        r'for M in $(seq 0 5); do '
-        r'  KEY=$(date -d "-${M} month" +%Y-%m 2>/dev/null); '
-        r'  [ -z "$KEY" ] && continue; '
-        r'  VAL=$(nvram get "traff-${KEY}" 2>/dev/null); '
-        r'  [ -n "$VAL" ] && echo "${KEY}:${VAL}"; '
-        r'done; '
-        r'echo "=DEV="; '
-        // Fallback: read /proc/net/dev for current WAN interface
-        r'WAN=$(nvram get wan_iface 2>/dev/null || echo usb0); '
-        r'cat /proc/net/dev | grep -E "${WAN}|br0" | head -3'
+        'kill -USR1 \$(pidof rstats 2>/dev/null) 2>/dev/null; '
+        'sleep 1; '
+        'echo "=MONTHS="; '
+        'for M in 0 1 2 3 4 5; do \'
+        '  D=$(date +%Y-%m 2>/dev/null); \'
+        '  [ -z "\$D" ] && break; \'
+        '  V=\$(nvram get "traff-\$D" 2>/dev/null); \'
+        '  [ -n "\$V" ] && echo "\$D:\$V"; \'
+        '  D=\$(date -d "-\${M} month" +%Y-%m 2>/dev/null || true); \'
+        '  [ -n "\$D" ] && { V2=\$(nvram get "traff-\$D" 2>/dev/null); [ -n "\$V2" ] && echo "\$D:\$V2"; } \'
+        'done 2>/dev/null; '
+        'echo "=DEV="; '
+        'cat /proc/net/dev'
       );
       return _parseTrafficHistory(raw);
     } catch (e) {
@@ -251,17 +273,17 @@ nvram get wl1_crypto
           if (colonIdx < 7) continue;
           final key = t.substring(0, colonIdx);
           final val = t.substring(colonIdx + 1).trim();
-          // Validate key is YYYY-MM format
           if (RegExp(r'\d{4}-\d{2}').hasMatch(key) && val.isNotEmpty) {
             monthData[key] = val;
           }
         } else if (section == '=DEV=') {
-          // /proc/net/dev line: "  iface: rx_bytes ... tx_bytes..."
-          final clean = t.replaceAll(RegExp(r'^[^:]+:'), '').trim();
+          // Only accumulate usb0 (WAN) bytes
+          if (!t.startsWith('usb0:')) continue;
+          final clean = t.replaceFirst(RegExp(r'^usb0:'), '').trim();
           final parts = clean.split(RegExp(r'\s+'));
           if (parts.length >= 9) {
-            devRxBytes += int.tryParse(parts[0]) ?? 0;
-            devTxBytes += int.tryParse(parts[8]) ?? 0;
+            devRxBytes = int.tryParse(parts[0]) ?? 0;  // rx_bytes
+            devTxBytes = int.tryParse(parts[8]) ?? 0;  // tx_bytes
           }
         }
       }
@@ -270,10 +292,8 @@ nvram get wl1_crypto
       if (monthData.isNotEmpty) {
         final sortedKeys = monthData.keys.toList()..sort((a, b) => b.compareTo(a));
         final monthlyList = <Map<String, dynamic>>[];
-
         for (final key in sortedKeys) {
-          // FreshTomato traff- format: "rxGB rxKB txGB txKB[...]"
-          // Each bracket = one day's data
+          // FreshTomato traff- format: "rxGB rxKB txGB txKB[rxGB rxKB txGB txKB[..."
           final entries = monthData[key]!
               .split('[').where((s) => s.isNotEmpty).toList();
           double totalRx = 0, totalTx = 0;
@@ -295,17 +315,20 @@ nvram get wl1_crypto
         }
         result['monthly'] = monthlyList;
 
-        // Daily from most recent month
+        // Daily breakdown from the most recent month
         if (sortedKeys.isNotEmpty) {
           final entries = monthData[sortedKeys.first]!
               .split('[').where((s) => s.isNotEmpty).toList();
           final dailyList = <Map<String, dynamic>>[];
           for (int i = 0; i < entries.length && i < 31; i++) {
-            final parts = entries[i].replaceAll(']', '').trim().split(RegExp(r'\s+'));
+            final parts = entries[i].replaceAll(']', '').trim()
+                .split(RegExp(r'\s+'));
             double rx = 0, tx = 0;
             if (parts.length >= 4) {
-              rx = (double.tryParse(parts[0]) ?? 0) + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
-              tx = (double.tryParse(parts[2]) ?? 0) + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
+              rx = (double.tryParse(parts[0]) ?? 0)
+                  + (double.tryParse(parts[1]) ?? 0) / (1024.0 * 1024.0);
+              tx = (double.tryParse(parts[2]) ?? 0)
+                  + (double.tryParse(parts[3]) ?? 0) / (1024.0 * 1024.0);
             } else if (parts.length >= 2) {
               rx = (double.tryParse(parts[0]) ?? 0) / 1024.0;
               tx = (double.tryParse(parts[1]) ?? 0) / 1024.0;
@@ -315,17 +338,20 @@ nvram get wl1_crypto
           result['daily'] = dailyList;
         }
       } else if (devRxBytes > 0 || devTxBytes > 0) {
-        // Fallback: show current session from /proc/net/dev as today's data
+        // No traff- nvram data: show cumulative /proc/net/dev session bytes
+        // This represents total bytes since last router boot
         final now = DateTime.now();
-        final monthKey = '${now.year}-${now.month.toString().padLeft(2, '0')}';
+        final monthKey = '\${now.year}-\${now.month.toString().padLeft(2, "0")}';
+        // Convert bytes to GB
         final rxGB = devRxBytes / (1024.0 * 1024.0 * 1024.0);
         final txGB = devTxBytes / (1024.0 * 1024.0 * 1024.0);
         result['monthly'] = [{'month': monthKey, 'rx': rxGB, 'tx': txGB}];
-        result['daily']   = [{'day': now.day, 'rx': rxGB, 'tx': txGB}];
+        result['daily']   = [{'day': now.day,    'rx': rxGB, 'tx': txGB}];
       }
     } catch (_) {}
     return result;
   }
+
 
   //  Device connections (conntrack) 
   Future<List<Map<String, dynamic>>> getDeviceConnections(String deviceIp) async {
